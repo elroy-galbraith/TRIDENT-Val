@@ -14,7 +14,7 @@ const TABS = [
   { id: 'model-card', label: 'Model Card' },
 ]
 
-const VIEW_IDS = new Set(['dashboard', 'portfolio', 'map', 'model-card', 'inspector'])
+const VIEW_IDS = new Set(['dashboard', 'portfolio', 'map', 'model-card'])
 
 function stateToPath({ view, pid, gridStatus }) {
   if (view === 'inspector' && pid != null) return `/inspector/${encodeURIComponent(pid)}`
@@ -25,7 +25,7 @@ function stateToPath({ view, pid, gridStatus }) {
 function stateFromLocation() {
   const segments = window.location.pathname.split('/').filter(Boolean)
   const [head, arg] = segments
-  if (head === 'inspector' && arg) return { view: 'inspector', pid: arg, gridStatus: '' }
+  if (head === 'inspector' && arg) return { view: 'inspector', pid: decodeURIComponent(arg), gridStatus: '' }
   if (VIEW_IDS.has(head)) {
     const status = head === 'portfolio' ? new URLSearchParams(window.location.search).get('status') || '' : ''
     return { view: head, pid: null, gridStatus: status }
@@ -53,7 +53,9 @@ export default function App() {
 
   useEffect(() => {
     // Normalize the initial URL (e.g. bare "/") without adding an extra history entry.
-    navigate(stateFromLocation(), { replace: true })
+    const initial = stateFromLocation()
+    window.history.replaceState(initial, '', stateToPath(initial))
+
     const onPopState = () => setNavState(stateFromLocation())
     window.addEventListener('popstate', onPopState)
     return () => window.removeEventListener('popstate', onPopState)
