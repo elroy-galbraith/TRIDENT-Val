@@ -80,7 +80,12 @@ export default function About({ user, onNavigate }) {
         <div className="label mb-2">On this page</div>
         <div className="flex flex-wrap gap-x-5 gap-y-1.5 text-sm">
           {TOC.map((t) => (
-            <a key={t.id} href={`#${t.id}`} className="text-teal hover:underline underline-offset-2">
+            <a key={t.id} href={`#${t.id}`}
+              onClick={(e) => {
+                e.preventDefault()
+                document.getElementById(t.id)?.scrollIntoView({ behavior: 'smooth' })
+              }}
+              className="text-teal hover:underline underline-offset-2">
               {t.label}
             </a>
           ))}
@@ -157,9 +162,9 @@ export default function About({ user, onNavigate }) {
           {visibleFeatures.map((f) => (
             <button key={f.view} onClick={() => onNavigate(f.view)}
               className="text-left card p-4 hover:border-teal transition-colors">
-              <div className="text-sm font-semibold text-ink">{f.title}</div>
-              <p className="mt-1.5 text-xs leading-relaxed text-inkmute">{f.body}</p>
-              <div className="mt-2.5 text-xs font-medium text-teal">Open {f.title} →</div>
+              <span className="block text-sm font-semibold text-ink">{f.title}</span>
+              <span className="block mt-1.5 text-xs leading-relaxed text-inkmute">{f.body}</span>
+              <span className="block mt-2.5 text-xs font-medium text-teal">Open {f.title} →</span>
             </button>
           ))}
         </div>
