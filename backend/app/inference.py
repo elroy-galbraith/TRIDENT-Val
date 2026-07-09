@@ -1,9 +1,18 @@
-"""AVM inference layer.
+"""AVM inference layer — model-registry aware.
 
-LightGBM's pred_contrib=True returns exact TreeSHAP values natively, so the
-"Explainable AI widget" is backed by real per-feature contributions, not a mockup.
-Contributions are computed in log-price space and converted to approximate dollar
-impact around the prediction point.
+Every registered model lives under model/<model_id>/ as three files:
+  model.joblib       - fitted estimator (LightGBM booster, or an sklearn Pipeline)
+  feature_spec.json  - feature names, types, categories, ordinal maps (drives the UI)
+  manifest.json       - registry metadata: name, version, architecture, explainer, metrics
+
+Both currently-supported architectures predict log1p(SalePrice), so `predict()` is
+architecture-agnostic. Explainability is dispatched on manifest["explainer"]:
+  - "tree_shap"   - LightGBM's pred_contrib=True returns exact TreeSHAP values natively.
+  - "linear_coef" - exact per-feature attribution from a linear model's own coefficients
+                    (transformed-column contributions summed back to the original feature).
+Neither is an approximation of the model's own reasoning — both are the model explaining
+itself, just via the mechanics native to its architecture.  Contributions are computed in
+log-price space and converted to approximate dollar impact around the prediction point.
 """
 import json
 from functools import lru_cache
@@ -73,18 +82,44 @@ FEATURE_EXPLANATIONS = {
 }
 
 
-@lru_cache(maxsize=1)
-def get_model():
-    return joblib.load(MODEL_DIR / "avm_lgbm.joblib")
+class UnknownModelError(KeyError):
+    pass
 
 
-@lru_cache(maxsize=1)
-def get_spec() -> dict:
-    return json.loads((MODEL_DIR / "feature_spec.json").read_text())
+def _model_path(model_id: str) -> Path:
+    d = MODEL_DIR / model_id
+    if not (d / "manifest.json").exists():
+        raise UnknownModelError(f"No registered model artifact at model/{model_id}/")
+    return d
 
 
-def build_frame(payloads: list[dict]) -> pd.DataFrame:
-    spec = get_spec()
+@lru_cache(maxsize=None)
+def list_model_ids() -> tuple[str, ...]:
+    """Every model_id with a manifest under model/ — the on-disk registry."""
+    if not MODEL_DIR.exists():
+        return ()
+    return tuple(sorted(
+        d.name for d in MODEL_DIR.iterdir() if (d / "manifest.json").exists()
+    ))
+
+
+@lru_cache(maxsize=None)
+def get_manifest(model_id: str) -> dict:
+    return json.loads((_model_path(model_id) / "manifest.json").read_text())
+
+
+@lru_cache(maxsize=None)
+def get_model(model_id: str):
+    return joblib.load(_model_path(model_id) / "model.joblib")
+
+
+@lru_cache(maxsize=None)
+def get_spec(model_id: str) -> dict:
+    return json.loads((_model_path(model_id) / "feature_spec.json").read_text())
+
+
+def build_frame(payloads: list[dict], model_id: str) -> pd.DataFrame:
+    spec = get_spec(model_id)
     rows = []
     for p in payloads:
         row = {}
@@ -102,22 +137,62 @@ def build_frame(payloads: list[dict]) -> pd.DataFrame:
     return X
 
 
-def predict(payloads: list[dict]) -> np.ndarray:
-    X = build_frame(payloads)
-    return np.expm1(get_model().predict(X))
+def predict(payloads: list[dict], model_id: str) -> np.ndarray:
+    X = build_frame(payloads, model_id)
+    return np.expm1(get_model(model_id).predict(X))
 
 
-def valuate_with_drivers(payload: dict, top_k: int = 3) -> dict:
-    spec = get_spec()
-    X = build_frame([payload])
-    model = get_model()
+def _tree_shap_contrib(model, X: pd.DataFrame) -> np.ndarray:
+    contrib = model.predict(X, pred_contrib=True)  # (n, n_features + 1); last col is base value
+    return contrib[:, :-1]
+
+
+def _linear_contrib(model, spec: dict, X: pd.DataFrame) -> np.ndarray:
+    """Exact per-original-feature attribution for an sklearn Pipeline(prep, reg) fit on
+    log1p(price), where `prep` is a ColumnTransformer([("num", scaler, numeric+ordinal),
+    ("cat", one_hot, categorical)]) built with explicit column order matching spec["features"]
+    and explicit `categories=` matching spec["categorical"] (see scripts/train_model.py) —
+    so transformed-column groups are contiguous and their boundaries are derivable from the
+    spec alone, with no dependence on sklearn's get_feature_names_out().
+    """
+    prep, reg = model.named_steps["prep"], model.named_steps["reg"]
+    Xt = prep.transform(X)
+    if hasattr(Xt, "toarray"):
+        Xt = Xt.toarray()
+    contrib_t = Xt * reg.coef_
+
+    n_num_ord = len(spec["numeric"]) + len(spec["ordinal"])
+    out = np.zeros((X.shape[0], len(spec["features"])))
+    out[:, :n_num_ord] = contrib_t[:, :n_num_ord]
+    col = n_num_ord
+    for i, catf in enumerate(spec["categorical"]):
+        width = len(spec["categorical"][catf])
+        out[:, n_num_ord + i] = contrib_t[:, col:col + width].sum(axis=1)
+        col += width
+    return out
+
+
+def _contributions(model_id: str, X: pd.DataFrame) -> np.ndarray:
+    manifest = get_manifest(model_id)
+    model = get_model(model_id)
+    spec = get_spec(model_id)
+    if manifest["explainer"] == "tree_shap":
+        return _tree_shap_contrib(model, X)
+    if manifest["explainer"] == "linear_coef":
+        return _linear_contrib(model, spec, X)
+    raise ValueError(f"Unknown explainer type for model {model_id!r}: {manifest['explainer']!r}")
+
+
+def valuate_with_drivers(payload: dict, model_id: str, top_k: int = 3) -> dict:
+    spec = get_spec(model_id)
+    X = build_frame([payload], model_id)
+    model = get_model(model_id)
 
     log_pred = model.predict(X)[0]
     value = float(np.expm1(log_pred))
 
-    contrib = model.predict(X, pred_contrib=True)[0]  # per-feature SHAP + base value
-    feat_contrib = contrib[:-1]
-    # Convert log-space SHAP to approximate dollar impact at the prediction point.
+    feat_contrib = _contributions(model_id, X)[0]
+    # Convert log-space contributions to approximate dollar impact at the prediction point.
     dollar = value * (1 - np.exp(-feat_contrib))
 
     pairs = sorted(zip(spec["features"], dollar), key=lambda t: t[1], reverse=True)
@@ -127,6 +202,7 @@ def valuate_with_drivers(payload: dict, top_k: int = 3) -> dict:
     detractors = [fmt(f, d) for f, d in sorted(pairs, key=lambda t: t[1])[:top_k] if d < 0]
 
     return {
+        "model_id": model_id,
         "estimated_market_value": round(value, 2),
         "error_band_pct": ERROR_BAND,
         "value_low": round(value * (1 - ERROR_BAND), 2),
@@ -136,25 +212,60 @@ def valuate_with_drivers(payload: dict, top_k: int = 3) -> dict:
     }
 
 
-def global_importance(payloads: list[dict]) -> dict:
+def valuate_batch_with_drivers(payloads: list[dict], model_id: str, top_k: int = 3) -> list[dict]:
+    """Same output shape as valuate_with_drivers, vectorized over a whole population in one
+    pass — used at seed time to shadow-score every registered model against the full
+    portfolio without re-running build_frame/contributions once per property."""
+    if not payloads:
+        return []
+
+    spec = get_spec(model_id)
+    model = get_model(model_id)
+    X = build_frame(payloads, model_id)
+
+    log_pred = model.predict(X)
+    values = np.expm1(log_pred)
+    feat_contrib = _contributions(model_id, X)
+    dollar = values[:, None] * (1 - np.exp(-feat_contrib))
+
+    fmt = lambda p, f, d: {"feature": f, "label": LABELS.get(f, f),
+                           "value": p.get(f), "impact_usd": round(float(d))}
+    results = []
+    for i, payload in enumerate(payloads):
+        pairs = sorted(zip(spec["features"], dollar[i]), key=lambda t: t[1], reverse=True)
+        value = float(values[i])
+        results.append({
+            "model_id": model_id,
+            "estimated_market_value": round(value, 2),
+            "error_band_pct": ERROR_BAND,
+            "value_low": round(value * (1 - ERROR_BAND), 2),
+            "value_high": round(value * (1 + ERROR_BAND), 2),
+            "top_drivers": [fmt(payload, f, d) for f, d in pairs[:top_k] if d > 0],
+            "top_detractors": [fmt(payload, f, d) for f, d in
+                               sorted(pairs, key=lambda t: t[1])[:top_k] if d < 0],
+        })
+    return results
+
+
+def global_importance(payloads: list[dict], model_id: str) -> dict:
     """Average |dollar impact| per feature across a population of properties.
 
-    Same TreeSHAP (pred_contrib) machinery as valuate_with_drivers, run in one batch over
-    the whole portfolio instead of a single property — this is what backs the Model Card's
-    "what drives the model" chart. The caller is expected to cache the result: property
-    feature vectors are immutable after seeding, so this doesn't need to re-run per request.
+    Same explainability machinery as valuate_with_drivers, run in one batch over the whole
+    portfolio instead of a single property — this is what backs each model's Model Card
+    "what drives the model" chart. The caller is expected to cache the result per model_id:
+    property feature vectors are immutable after seeding, so this doesn't need to re-run
+    per request.
     """
     if not payloads:  # e.g. requested before seeding has populated the properties table
         return {"sample_size": 0, "drivers": []}
 
-    spec = get_spec()
-    model = get_model()
-    X = build_frame(payloads)
+    spec = get_spec(model_id)
+    model = get_model(model_id)
+    X = build_frame(payloads, model_id)
 
     log_pred = model.predict(X)
     values = np.expm1(log_pred)
-    contrib = model.predict(X, pred_contrib=True)  # (n, n_features + 1); last col is base value
-    feat_contrib = contrib[:, :-1]
+    feat_contrib = _contributions(model_id, X)
     dollar = values[:, None] * (1 - np.exp(-feat_contrib))
 
     mean_abs = np.abs(dollar).mean(axis=0)

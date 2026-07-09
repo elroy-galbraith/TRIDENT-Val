@@ -1,14 +1,18 @@
 """Zero-scrape database instantiation for TRIDENT-Val.
 
 - Ingests Ames raw CSV into `properties` (full model feature vector stored as JSON).
-- Seeds `bank_portfolio_meta`: loan balance = U(0.60, 0.90) * SalePrice (deterministic RNG),
-  precomputed AVM value, and variance-based audit triage:
+- Registers every model/<model_id>/manifest.json into the `models` table (the model risk
+  inventory) and shadow-scores the *entire* portfolio against *every* registered model into
+  `model_valuations` — champion and challenger(s) alike. See scripts/train_model.py.
+- Books the champion's valuation onto `bank_portfolio_meta.current_avm_value` and derives
+  variance-based audit triage from it:
       |AVM - Sale| / Sale > 15%  -> Flagged: High Variance
       8% - 15%                    -> Pending Review
       otherwise                   -> Approved
 - Seeds `property_images` with deterministic Unsplash URLs keyed on structural category.
 """
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -20,8 +24,9 @@ sys.path.insert(0, str(ROOT / "backend"))
 from app.auth import hash_password  # noqa: E402
 from app.db import Base, SessionLocal, engine  # noqa: E402
 from app.geo import property_latlng  # noqa: E402
-from app.models import (AuditStatus, BankPortfolioMeta, Property,  # noqa: E402
-                        PropertyImage, User, UserRole)
+from app.models import (AuditStatus, BankPortfolioMeta, ModelStatus,  # noqa: E402
+                        ModelValuation, Property, PropertyImage, RegisteredModel,
+                        User, UserRole)
 from app import inference  # noqa: E402
 from train_model import CATEGORICAL, FEATURES, NUMERIC, ORDINAL, load_frame  # noqa: E402
 
@@ -68,6 +73,48 @@ def image_category(bldg_type: str, house_style: str) -> str:
     return bldg_type if bldg_type in UNSPLASH else "default"
 
 
+def register_models(session) -> str:
+    """Insert a `models` row per model/<id>/manifest.json. Returns the champion's model_id.
+
+    Enforces the champion invariant here rather than trusting the manifests blindly: if more
+    than one manifest claims default_status=Champion, the first (alphabetically, by id) wins
+    and the rest are registered as challengers instead.
+    """
+    model_ids = inference.list_model_ids()
+    if not model_ids:
+        raise RuntimeError(
+            "No trained models found under model/ — run `python scripts/train_model.py` first.")
+
+    champion_id = None
+    rows = {}
+    for mid in model_ids:
+        manifest = inference.get_manifest(mid)
+        status = ModelStatus(manifest["default_status"])
+        if status == ModelStatus.CHAMPION:
+            if champion_id is not None:
+                status = ModelStatus.CHALLENGER
+            else:
+                champion_id = mid
+        rows[mid] = RegisteredModel(
+            id=mid, name=manifest["name"], version=manifest["version"],
+            architecture=manifest["architecture"], description=manifest.get("description", ""),
+            explainer=manifest["explainer"], status=status,
+            holdout_mape=manifest["holdout_mape"], holdout_r2=manifest["holdout_r2"],
+            trained_at=datetime.fromisoformat(manifest["trained_at"]),
+            promoted_at=datetime.now(timezone.utc) if status == ModelStatus.CHAMPION else None,
+        )
+
+    if champion_id is None:  # no manifest opted in; fall back to the first registered model
+        champion_id = model_ids[0]
+        rows[champion_id].status = ModelStatus.CHAMPION
+        rows[champion_id].promoted_at = datetime.now(timezone.utc)
+
+    session.add_all(rows.values())
+    session.commit()
+    print(f"Registered models {list(model_ids)}. Champion: {champion_id}")
+    return champion_id
+
+
 def main() -> None:
     Base.metadata.drop_all(engine)
     Base.metadata.create_all(engine)
@@ -82,18 +129,23 @@ def main() -> None:
         df[col] = df[col].fillna("NA").astype(str)
 
     payloads = df[FEATURES].to_dict("records")
-    print(f"Scoring {len(payloads)} properties with the AVM...")
-    avm_values = inference.predict(payloads)
+
+    session = SessionLocal()
+    seed_users(session)  # committed on its own so login works even if property seeding fails partway
+    champion_id = register_models(session)
+    model_ids = inference.list_model_ids()
+
+    print(f"Shadow-scoring {len(payloads)} properties against {len(model_ids)} model(s)...")
+    valuations_by_model = {mid: inference.valuate_batch_with_drivers(payloads, mid)
+                           for mid in model_ids}
 
     rng = np.random.default_rng(20260709)  # deterministic seeding
     ratios = rng.uniform(0.60, 0.90, size=len(df))
 
-    session = SessionLocal()
-    seed_users(session)  # committed on its own so login works even if property seeding fails partway
-
     for i, (_, row) in enumerate(df.iterrows()):
+        pid = int(row["pid"])
         sale = float(row["saleprice"])
-        avm = float(avm_values[i])
+        avm = valuations_by_model[champion_id][i]["estimated_market_value"]
         variance = (avm - sale) / sale
         if abs(variance) > FLAG_HI:
             status = AuditStatus.FLAGGED_HIGH_VARIANCE
@@ -103,9 +155,9 @@ def main() -> None:
             status = AuditStatus.APPROVED
 
         cat = image_category(row["bldg_type"], row["house_style"])
-        lat, lng = property_latlng(int(row["pid"]), row["neighborhood"])
+        lat, lng = property_latlng(pid, row["neighborhood"])
         session.add(Property(
-            pid=int(row["pid"]),
+            pid=pid,
             neighborhood=row["neighborhood"], bldg_type=row["bldg_type"],
             house_style=row["house_style"], ms_zoning=row["ms_zoning"],
             year_built=int(row["year_built"]),
@@ -122,9 +174,18 @@ def main() -> None:
                 avm_variance_pct=round(variance, 4),
                 audit_status=status,
                 underwriter_notes="",
+                resolved_model_id=champion_id,
             ),
             image=PropertyImage(url=UNSPLASH[cat], category=cat),
         ))
+        for mid in model_ids:
+            v = valuations_by_model[mid][i]
+            session.add(ModelValuation(
+                pid=pid, model_id=mid,
+                estimated_value=v["estimated_market_value"],
+                value_low=v["value_low"], value_high=v["value_high"],
+                top_drivers=v["top_drivers"], top_detractors=v["top_detractors"],
+            ))
     session.commit()
 
     counts = {s.value: session.query(BankPortfolioMeta).filter(

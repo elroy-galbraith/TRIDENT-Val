@@ -1,10 +1,20 @@
 # TRIDENT-Val — Residential Portfolio AVM & Risk Triage Engine (PoC)
 
-End-to-end sandbox per PRD v1.0: LightGBM AVM trained on the Ames Housing Dataset (2,930 assets),
-FastAPI inference service, PostgreSQL portfolio book, and a three-view React/Tailwind workbench
-for risk officers and underwriters.
+End-to-end sandbox per PRD v1.0: a small **model risk inventory** (a LightGBM champion plus a
+Ridge linear challenger, both trained on the Ames Housing Dataset's 2,930 assets), FastAPI
+inference service, PostgreSQL portfolio book, and a multi-view React/Tailwind workbench for
+risk officers and underwriters.
 
-**Holdout accuracy:** MAPE 7.9%, R² 0.94. **Live inference latency:** ~40 ms round-trip.
+**Champion holdout accuracy:** MAPE 7.9%, R² 0.94. **Live inference latency:** ~40 ms round-trip.
+
+**Champion/challenger governance:** exactly one registered model is the *champion* — its
+valuation is what gets booked onto every asset. Every other model is a *challenger*: it scores
+the whole portfolio in shadow, alongside the champion, and never books anything on its own.
+Where the two disagree beyond a threshold, that asset routes to a disagreement queue for a
+human decision (book the champion, book the challenger, or a manual override) — logged with a
+rationale to the audit ledger. Promoting a challenger to champion is a separate, deliberate,
+Admin-only act that re-books the whole portfolio in one pass. See
+[Model Governance](#model-governance-championchallenger) below.
 
 ## Quickstart — Docker (recommended, matches PRD stack)
 
@@ -16,10 +26,12 @@ docker compose up --build
 - App: http://localhost:8080
 - API docs (Swagger): http://localhost:8000/docs
 
-First boot trains nothing (the fitted model ships in `model/`) and auto-seeds Postgres:
-2,930 properties, simulated loan balances at 60–90% of baseline sale price, variance-based
-audit triage, deterministic Unsplash image mapping, and three demo user logins (see
-[Authentication & Roles](#authentication--roles-poc-grade)). Seeding is idempotent.
+First boot trains nothing (the fitted models ship in `model/lgbm_v1/` and `model/linear_v1/`)
+and auto-seeds Postgres: 2,930 properties, simulated loan balances at 60–90% of baseline sale
+price, both models registered and shadow-scoring the whole portfolio, variance-based audit
+triage from the champion's valuation, deterministic Unsplash image mapping, and three demo
+user logins (see [Authentication & Roles](#authentication--roles-poc-grade)). Seeding is
+idempotent.
 
 **Upgrading an existing checkout?** This adds a login and a new `users` table — see the
 fresh-database note in [Authentication & Roles](#authentication--roles-poc-grade) before
@@ -71,20 +83,24 @@ trusted local/demo network with the defaults intact.
 
 ### Role matrix
 
-| Role | View portfolio / properties / model | Read the audit log ledger (`/logs`) | Write audit decisions |
-|---|---|---|---|
-| Viewer | Yes | No | No |
-| Underwriter | Yes | Yes | Yes |
-| Admin | Yes | Yes | Yes |
+| Role | View portfolio / properties / models | Read the audit log ledger (`/logs`) | Write audit / triage decisions | Promote a challenger to champion |
+|---|---|---|---|---|
+| Viewer | Yes | No | No | No |
+| Underwriter | Yes | Yes | Yes | No |
+| Admin | Yes | Yes | Yes | Yes |
 
-Admin is currently permission-identical to Underwriter — it's a taxonomy placeholder for
-future admin-only capability (e.g. user management), not wired to anything distinct yet.
+Model promotion is Admin-only and Admin-only alone — it's the one place the role split isn't
+a placeholder: re-booking the entire portfolio from a different model is a portfolio-level
+model risk decision, not a per-asset override, so it sits one rung above the Underwriter's
+day-to-day triage authority.
 
-Every write is attributed: `PATCH /properties/{pid}/audit` records the acting
-username against the status/notes change in `system_logs.actor`, queryable via
-`GET /api/v1/logs`. The frontend backs this with a server-enforced check — the
-Inspector's audit controls are disabled for non-Underwriter/Admin roles, but the real
-gate is the API's `require_role` dependency, not the disabled attribute.
+Every write is attributed: `PATCH /properties/{pid}/audit`, `POST
+/properties/{pid}/triage-decision`, and `POST /models/{model_id}/promote` all record the
+acting username (and, for the latter two, the rationale text) against the change in
+`system_logs.actor`/`system_logs.context`, queryable via `GET /api/v1/logs`. The frontend
+backs this with a server-enforced check — the Inspector's audit/triage controls and the
+Model Card's "Promote to Champion" button are disabled or hidden for roles that can't use
+them, but the real gate is the API's `require_role` dependency, not the disabled attribute.
 
 ### Out of scope (foundation for later)
 
@@ -102,13 +118,57 @@ Deliberately not built in this pass, so it's easy to pick up without re-deriving
   invalidated early by rotating `SESSION_SECRET` for everyone)
 - Any user-management UI — adding/removing/resetting a demo user means editing
   `scripts/seed_db.py` and doing a fresh reseed
-- A wired-up distinction between Admin and Underwriter
 
-## Retraining the model
+## Model Governance (Champion/Challenger)
+
+Model risk management, not just a second AVM for comparison's sake — this mirrors how a
+bank's model validation function is expected to operate a model inventory (model cards,
+shadow scoring, governed promotion) rather than swapping in whichever model scores best on
+a leaderboard.
+
+- **Registry** (`models` table, populated from `model/<id>/manifest.json` at seed time):
+  every trained model's name, version, architecture, explainability method, holdout metrics,
+  and governance status — `Champion` (exactly one; its valuation is booked), `Challenger`
+  (scores the portfolio in shadow, never booked), or `Retired`.
+- **Shadow scoring** (`model_valuations` table): every registered model is scored against
+  every property at seed time — an append-only ledger, never overwritten in place — so
+  champion-vs-challenger comparison and the disagreement queue are just queries against
+  historical valuations, not live re-inference.
+- **Two genuinely different architectures**, not a version bump, so their disagreement is a
+  real signal: `lgbm_v1` (LightGBM gradient-boosted trees, `tree_shap` explainer — native
+  TreeSHAP via `pred_contrib=True`) and `linear_v1` (Ridge linear regression, `linear_coef`
+  explainer — exact per-feature attribution from the model's own coefficients, mapped back
+  from the one-hot-encoded design matrix to the original feature names). The linear
+  challenger tends to diverge most on high-end and unusual properties — it structurally
+  can't represent the interaction effects the tree model captures — which is exactly what
+  makes its disagreements worth routing to a human rather than averaging away.
+- **Comparison & disagreement queue** (`GET /api/v1/models/compare`,
+  `GET /api/v1/models/disagreements`, surfaced in the frontend's Compare tab): an agreement
+  scatter, per-neighborhood MAPE/bias breakdown, and a divergence-ranked queue with a
+  configurable threshold.
+- **Triage decision** (`POST /api/v1/properties/{pid}/triage-decision`, Underwriter/Admin):
+  for one asset, book the champion's value, book a specific challenger's value, or a manual
+  override — each requires a rationale, logged to the audit ledger, and updates the booked
+  `current_avm_value`/`avm_variance_pct`/`audit_status` in the same pass.
+- **Promotion** (`POST /api/v1/models/{model_id}/promote`, Admin-only): designates a new
+  champion at the portfolio level and re-books every asset's `current_avm_value` from that
+  model's shadow valuations in one transaction — a deliberate, logged, all-or-nothing act,
+  never a per-asset choice.
+
+Out of scope for this pass: automatic retraining/CI for new model versions, drift
+monitoring/alerting, and a fairness/disparate-impact audit across models — see the Model
+Card's Limitations section for what each model doesn't cover.
+
+## Retraining the models
 
 ```bash
-python scripts/train_model.py   # rewrites model/avm_lgbm.joblib + model/feature_spec.json
+python scripts/train_model.py   # writes model/lgbm_v1/ and model/linear_v1/, each with
+                                 # model.joblib + feature_spec.json + manifest.json
 ```
+
+Retraining alone doesn't change what's booked — rerun `scripts/seed_db.py` afterward to
+re-register the models and re-score the portfolio, or use `POST /models/{model_id}/promote`
+against a running app to promote a specific version without a full reseed.
 
 ## AI Copilot (page-agent)
 
@@ -156,12 +216,18 @@ agent acts — worth keeping in mind alongside the audit-ledger fencing above.
 
 ```
 data/ames_raw.csv          De Cock Ames dataset (2,930 rows, zero-scrape ingestion)
-scripts/train_model.py     LightGBM on log1p(SalePrice); 26 curated features
-scripts/seed_db.py         DB instantiation + bank_portfolio_meta + image mapping
+scripts/train_model.py     Trains champion (LightGBM) + challenger (Ridge linear) into
+                           model/<id>/{model.joblib, feature_spec.json, manifest.json}
+scripts/seed_db.py         DB instantiation + model registry + shadow-scoring + image mapping
+model/
+  lgbm_v1/                 Champion artifact + manifest (architecture, explainer, metrics)
+  linear_v1/               Challenger artifact + manifest
 backend/app/
-  models.py                properties / bank_portfolio_meta / property_images / system_logs / users
+  models.py                properties / bank_portfolio_meta / property_images / system_logs /
+                           users / models (registry) / model_valuations (shadow-scoring ledger)
   auth.py                  bcrypt hashing + session-cookie get_current_user / require_role deps
-  inference.py             AVM scoring + native TreeSHAP contributions (pred_contrib)
+  inference.py             Model-ID-keyed scoring; tree_shap (native TreeSHAP) and
+                           linear_coef (exact coefficient attribution) explainers
   logging_config.py        loguru setup: console, rotating file, and DB sinks
   main.py                  REST API (see below)
 frontend/src/
@@ -172,17 +238,22 @@ frontend/src/
     Dashboard.jsx          View 1 — exposure, avg LTV, triage count, LTV histogram,
                            neighborhood concentration chart
     PortfolioGrid.jsx      View 2 — listing-style cards, filters, sort, CSV export
-    Inspector.jsx          View 3 — glass-box matrix, SHAP widget, what-if scenario
-                           panel, delta meter, audit lifecycle box (role-gated)
-    ModelCard.jsx          View 4 — plain-language model card for non-technical auditors:
-                           what the model does, holdout accuracy, training data
+    Inspector.jsx          View 3 — glass-box matrix, SHAP/coefficient widget, what-if
+                           scenario panel, delta meter, audit lifecycle box, model
+                           comparison & triage decision panel (role-gated)
+    ModelCard.jsx          View 4 — model risk inventory + plain-language model card per
+                           registered model: what it does, holdout accuracy, training data
                            provenance, interactive global feature-importance chart,
-                           limitations & appropriate use
+                           limitations & appropriate use, promote-to-champion (Admin)
+    ModelCompare.jsx       View 5 — champion vs. challenger agreement scatter,
+                           per-neighborhood error/bias breakdown, disagreement queue,
+                           promote-to-champion (Admin)
 ```
 
 ### Key API endpoints
 
-All endpoints below require a logged-in session unless noted; ⚑ marks Underwriter/Admin-only.
+All endpoints below require a logged-in session unless noted; ⚑ marks Underwriter/Admin-only,
+⚑⚑ marks Admin-only.
 
 | Method | Path | Purpose |
 |---|---|---|
@@ -191,22 +262,31 @@ All endpoints below require a logged-in session unless noted; ⚑ marks Underwri
 | GET | `/api/v1/auth/me` | Current user, or 401 (frontend's session check) |
 | GET | `/api/v1/portfolio/summary` | Macro banners + chart data |
 | GET | `/api/v1/properties` | Filtered/paginated grid |
-| GET | `/api/v1/properties/{pid}` | Full asset file + baseline SHAP |
-| POST | `/api/v1/valuate` | Live what-if inference (±5% band + drivers) |
+| GET | `/api/v1/properties/{pid}` | Full asset file + baseline explainability (resolved model) |
+| GET | `/api/v1/properties/{pid}/valuations` | Every registered model's shadow valuation for one property |
+| POST | `/api/v1/valuate` | Live what-if inference against any model (±5% band + drivers) |
 | PATCH | `/api/v1/properties/{pid}/audit` | ⚑ Underwriter notes + status writeback |
+| POST | `/api/v1/properties/{pid}/triage-decision` | ⚑ Resolve a champion/challenger disagreement (book champion/challenger/manual + rationale) |
 | GET | `/api/v1/properties/export` | Structural CSV download |
-| GET | `/api/v1/model/spec` | Feature spec + holdout MAPE/R² (drives the UI + Model Card) |
-| GET | `/api/v1/model/importance` | Portfolio-wide average TreeSHAP $ impact per feature, cached (Model Card chart) |
+| GET | `/api/v1/models` | The model risk inventory: every registered model + governance status |
+| GET | `/api/v1/models/{model_id}` \| `/spec` \| `/importance` | Per-model card, feature spec, portfolio-wide feature importance (cached) |
+| POST | `/api/v1/models/{model_id}/promote` | ⚑⚑ Admin-only: designate a new champion, re-book the whole portfolio |
+| GET | `/api/v1/models/compare` | Champion vs. challenger: scatter points, per-neighborhood error/bias, agreement stats |
+| GET | `/api/v1/models/disagreements` | Paginated, divergence-ranked triage queue |
 | GET | `/api/v1/logs` | ⚑ Query the unified operational/audit log ledger (supports `?actor=`) |
 | POST | `/api/v1/logs/client` | Ingest batched frontend (loglevel) log entries (open — see Authentication & Roles) |
 | POST | `/api/v1/copilot/chat/completions` | AI copilot LLM proxy (see below) |
 
 ### Design notes
 
-- **Audit triage seeding** flags assets where |AVM − Sale| / Sale > 15%
+- **Audit triage seeding** flags assets where |champion AVM − Sale| / Sale > 15%
   (Pending Review at 8–15%), producing a realistic queue: ~130 flagged, ~390 pending.
-- **Explainability is real, not mocked**: LightGBM's `pred_contrib=True` returns exact
-  TreeSHAP values; contributions are converted to dollar impact at the prediction point.
+- **Explainability is real, not mocked, for every registered model**: the champion's
+  LightGBM uses `pred_contrib=True` for exact TreeSHAP values; the linear challenger uses
+  its own fitted coefficients (transformed-column contributions summed back to each
+  original feature) — an exact attribution, not an approximation borrowed from a different
+  model family. Both are converted to dollar impact the same way at the prediction point,
+  so champion and challenger drivers are directly comparable.
 - **Loan balances** use a seeded RNG (deterministic across rebuilds).
 - **Logging**: the backend (`loguru`) and frontend (`loglevel`) both log in a
   human-readable, timestamped format, and both feed the same `system_logs` table —
