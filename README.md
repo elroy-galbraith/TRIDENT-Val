@@ -9,6 +9,7 @@ for risk officers and underwriters.
 ## Quickstart — Docker (recommended, matches PRD stack)
 
 ```bash
+cp .env.example .env   # optional — only needed to enable the AI copilot, see below
 docker compose up --build
 ```
 
@@ -22,6 +23,7 @@ audit triage, and deterministic Unsplash image mapping. Seeding is idempotent.
 ## Quickstart — no Docker (SQLite fallback)
 
 ```bash
+cp .env.example .env   # optional — only needed to enable the AI copilot, see below
 pip install -r backend/requirements.txt
 PYTHONPATH=scripts python scripts/seed_db.py          # creates ./trident.db
 cd backend && uvicorn app.main:app --port 8000        # terminal 1
@@ -46,8 +48,12 @@ an OpenAI-compatible chat-completions API.
 
 The LLM API key is never sent to the browser: `frontend/src/copilot.js` points
 page-agent's `baseURL` at `/api/v1/copilot`, a same-origin FastAPI proxy
-(`backend/app/main.py`) that attaches the real key and forwards to the provider. Configure
-it with:
+(`backend/app/main.py`) that attaches the real key and forwards to the provider.
+
+Copy `.env.example` to `.env` and set `COPILOT_PROVIDER_API_KEY` to enable it — both
+`docker compose` (which auto-loads a root `.env`) and the no-Docker `uvicorn` path (via
+`python-dotenv`, loaded at the top of `main.py`) pick it up the same way. Leave `.env`
+unset/absent and the proxy just returns 503; the rest of the app is unaffected.
 
 | Env var | Default | Purpose |
 |---|---|---|

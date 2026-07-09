@@ -5,6 +5,7 @@ import time
 from typing import Optional
 
 import httpx
+from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, StreamingResponse
@@ -12,6 +13,8 @@ from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, joinedload
+
+load_dotenv()  # picks up a repo-root .env for local (non-Docker) runs; no-op if absent
 
 from . import inference
 from .db import Base, engine, get_db
