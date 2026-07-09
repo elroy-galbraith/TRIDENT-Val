@@ -270,10 +270,15 @@ a new write privilege. Every export is itself logged to the audit ledger
 (`GET /api/v1/logs`), naming who generated it and when.
 
 **Running WeasyPrint locally (no Docker):** it needs Pango/Fontconfig's native libraries, not
-just the `weasyprint` pip package. On Debian/Ubuntu: `apt install libpango-1.0-0
-libpangoft2-1.0-0 libfontconfig1 fonts-liberation` (see `backend/Dockerfile` for the Docker
-path, which installs these automatically). WeasyPrint itself needs no cairo/GDK-Pixbuf install
-— recent versions render through a pure-Python backend.
+just the `weasyprint` pip package. WeasyPrint itself needs no cairo/GDK-Pixbuf install — recent
+versions render through a pure-Python backend.
+- Debian/Ubuntu: `apt install libpango-1.0-0 libpangoft2-1.0-0 libfontconfig1 fonts-liberation`
+  (see `backend/Dockerfile` for the Docker path, which installs these automatically).
+- macOS: `brew install pango` (pulls in glib/harfbuzz/fontconfig transitively). If it still
+  can't find the library after that — a known Homebrew + `cffi`/`dlopen` gotcha, more common
+  on Apple Silicon, where Homebrew installs to `/opt/homebrew` instead of `/usr/local` — set
+  `export DYLD_FALLBACK_LIBRARY_PATH="$(brew --prefix)/lib"` in the same shell before starting
+  uvicorn.
 
 ## Architecture
 
