@@ -4,6 +4,7 @@ import {
 } from 'recharts'
 import { api, pct, usd } from '../api.js'
 import { Spinner } from '../components/shared.jsx'
+import { logger } from '../logger.js'
 import { setChartSummary } from '../copilot.js'
 import MapView from './MapView.jsx'
 
@@ -39,6 +40,14 @@ export default function Dashboard({ onTriage, onOpen }) {
 
   return (
     <div className="space-y-6">
+      <div className="flex justify-end">
+        <a href={api.portfolioReportUrl()} target="_blank" rel="noopener noreferrer"
+          onClick={() => logger.track('dashboard', 'Exported portfolio review summary.')}
+          aria-label="Export portfolio review summary as PDF"
+          className="text-sm text-teal hover:underline">
+          Export Portfolio Report ↗
+        </a>
+      </div>
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <Banner
           label="Total Portfolio Exposure"

@@ -119,9 +119,16 @@ export default function ModelCompare({ user, onOpen }) {
               <ModelStatusBadge status="Challenger" />
               <span className="font-medium">{compare.challenger.name}</span>
             </div>
+            <a href={api.portfolioReportUrl({ champion: championId, challenger: challengerId })}
+              target="_blank" rel="noopener noreferrer"
+              onClick={() => logger.track('model_compare', `Exported portfolio report for ${championId} vs. ${challengerId}.`)}
+              aria-label="Export portfolio review summary as PDF for this champion/challenger pair"
+              className="ml-auto text-teal hover:underline">
+              Export Report ↗
+            </a>
             {user?.role === 'Admin' && (
               <button onClick={promote} disabled={promoting || !challengerId}
-                className="ml-auto bg-ink hover:bg-black text-white text-sm font-medium px-4 py-2 rounded-sm disabled:opacity-50">
+                className="bg-ink hover:bg-black text-white text-sm font-medium px-4 py-2 rounded-sm disabled:opacity-50">
                 {promoting ? 'Promoting…' : 'Promote challenger to champion'}
               </button>
             )}

@@ -134,7 +134,15 @@ export default function Inspector({ pid, onBack, onOpen, user }) {
 
   return (
     <div className="space-y-4">
-      <button onClick={onBack} aria-label="Back to portfolio" className="text-sm text-teal hover:underline">← Back to portfolio</button>
+      <div className="flex items-center justify-between">
+        <button onClick={onBack} aria-label="Back to portfolio" className="text-sm text-teal hover:underline">← Back to portfolio</button>
+        <a href={api.assetReportUrl(pid)} target="_blank" rel="noopener noreferrer"
+          onClick={() => logger.track('inspector', `Exported underwriter decision report for PID ${pid}.`, null, pid)}
+          aria-label="Export underwriter decision report as PDF"
+          className="text-sm text-teal hover:underline">
+          Export Decision Report ↗
+        </a>
+      </div>
 
       {/* Header strip */}
       <div className="card p-5 flex flex-wrap gap-6 items-center">

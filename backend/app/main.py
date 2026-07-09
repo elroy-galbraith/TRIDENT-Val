@@ -19,7 +19,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 load_dotenv()  # picks up a repo-root .env for local (non-Docker) runs; no-op if absent
 
-from . import inference
+from . import inference, reports
 from .auth import DUMMY_PASSWORD_HASH, get_current_user, require_role, verify_password
 from .db import Base, engine, get_db
 from .logging_config import setup_logging
@@ -488,6 +488,31 @@ def portfolio_map(db: Session = Depends(get_db), user: User = Depends(get_curren
     return {"count": len(points), "points": points}
 
 
+@app.get("/api/v1/portfolio/report")
+def portfolio_report(champion: Optional[str] = None, challenger: Optional[str] = None,
+                     db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """Portfolio Review Summary (PDF): exposure, LTV distribution, audit triage outcomes, and
+    champion/challenger governance stats, with an AI-drafted executive summary grounded on
+    that same data. See app.reports for the IVS 103 / Red Book framing this follows. Open to
+    any logged-in role — same precedent as the CSV export below, since it's a different
+    format of data every role can already see live in-app, not a new write privilege."""
+    start = time.perf_counter()
+    try:
+        pdf_bytes = reports.render_portfolio_report_pdf(db, user, champion, challenger)
+    except Exception as e:
+        logger.bind(actor=user.username, context={"error": str(e)}).error(
+            "Portfolio report generation failed: {error}", error=str(e))
+        raise HTTPException(500, "Report generation failed")
+    latency_ms = round((time.perf_counter() - start) * 1000, 1)
+    logger.bind(actor=user.username, context={
+        "report_type": "portfolio_summary", "generation_ms": latency_ms,
+        "champion": champion, "challenger": challenger,
+    }).info("Exported portfolio review summary ({latency}ms).", latency=latency_ms)
+    return Response(
+        content=pdf_bytes, media_type="application/pdf",
+        headers={"Content-Disposition": 'inline; filename="trident-val_portfolio_review_summary.pdf"'})
+
+
 @app.get("/api/v1/properties")
 def list_properties(
     db: Session = Depends(get_db),
@@ -623,6 +648,31 @@ def get_comps(pid: int, limit: int = Query(6, ge=1, le=20), db: Session = Depend
     ranked = sorted(candidates, key=lambda c: comp_score(subject, c), reverse=True)[:limit]
 
     return {"subject": map_point(subject), "comps": [map_point(c) for c in ranked]}
+
+
+@app.get("/api/v1/properties/{pid}/report")
+def property_report(pid: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """Underwriter Decision Report (PDF) for one asset — AVM-supported, IVS 103 / RICS Red
+    Book VPS 6 structured. Not "the AVM's valuation report": see app.reports for why that
+    framing matters and what the sign-off block is grounded on. Open to any logged-in role —
+    same precedent as the CSV export, since it's a different format of data every role can
+    already see live on this asset's Inspector page, not a new write privilege."""
+    start = time.perf_counter()
+    try:
+        pdf_bytes = reports.render_asset_report_pdf(db, pid, user)
+    except Exception as e:
+        logger.bind(pid=pid, actor=user.username, context={"error": str(e)}).error(
+            "Asset decision report generation failed for PID {pid}: {error}", pid=pid, error=str(e))
+        raise HTTPException(500, "Report generation failed")
+    if pdf_bytes is None:
+        raise HTTPException(404, "Property not found")
+    latency_ms = round((time.perf_counter() - start) * 1000, 1)
+    logger.bind(pid=pid, actor=user.username, context={
+        "report_type": "asset_decision", "generation_ms": latency_ms,
+    }).info("Exported asset decision report for PID {pid} ({latency}ms).", pid=pid, latency=latency_ms)
+    return Response(
+        content=pdf_bytes, media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="trident-val_asset_{pid}_decision_report.pdf"'})
 
 
 @app.post("/api/v1/valuate")
