@@ -18,6 +18,9 @@ services:
       dockerfile: backend/Dockerfile
     environment:
       DATABASE_URL: postgresql+psycopg2://trident:trident_poc@db:5432/trident
+      COPILOT_PROVIDER_BASE_URL: ${COPILOT_PROVIDER_BASE_URL:-https://generativelanguage.googleapis.com/v1beta/openai}
+      COPILOT_PROVIDER_API_KEY: ${COPILOT_PROVIDER_API_KEY:-}
+      COPILOT_MODEL: ${COPILOT_MODEL:-gemini-2.5-flash}
     depends_on:
       db:
         condition: service_healthy

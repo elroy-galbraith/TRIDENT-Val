@@ -9,6 +9,7 @@ for risk officers and underwriters.
 ## Quickstart — Docker (recommended, matches PRD stack)
 
 ```bash
+cp .env.example .env   # optional — only needed to enable the AI copilot, see below
 docker compose up --build
 ```
 
@@ -22,6 +23,7 @@ audit triage, and deterministic Unsplash image mapping. Seeding is idempotent.
 ## Quickstart — no Docker (SQLite fallback)
 
 ```bash
+cp .env.example .env   # optional — only needed to enable the AI copilot, see below
 pip install -r backend/requirements.txt
 PYTHONPATH=scripts python scripts/seed_db.py          # creates ./trident.db
 cd backend && uvicorn app.main:app --port 8000        # terminal 1
@@ -37,6 +39,48 @@ On Windows PowerShell replace the seed line with:
 python scripts/train_model.py   # rewrites model/avm_lgbm.joblib + model/feature_spec.json
 ```
 
+## AI Copilot (page-agent)
+
+The frontend ships [page-agent](https://github.com/alibaba/page-agent) — a floating,
+in-page agent that reads the DOM as text and drives the UI on the user's behalf (open a
+property, change a filter, walk through a chart) via natural-language requests. It talks
+an OpenAI-compatible chat-completions API.
+
+The LLM API key is never sent to the browser: `frontend/src/copilot.js` points
+page-agent's `baseURL` at `/api/v1/copilot`, a same-origin FastAPI proxy
+(`backend/app/main.py`) that attaches the real key and forwards to the provider.
+
+Copy `.env.example` to `.env` and set `COPILOT_PROVIDER_API_KEY` to enable it — both
+`docker compose` (which auto-loads a root `.env`) and the no-Docker `uvicorn` path (via
+`python-dotenv`, loaded at the top of `main.py`) pick it up the same way. Leave `.env`
+unset/absent and the proxy just returns 503; the rest of the app is unaffected.
+
+| Env var | Default | Purpose |
+|---|---|---|
+| `COPILOT_PROVIDER_API_KEY` | *(empty)* | Provider API key. Unset = the proxy returns 503 and the widget is inert. |
+| `COPILOT_PROVIDER_BASE_URL` | Gemini's OpenAI-compat endpoint | Swap for Anthropic's OpenAI-compatible endpoint, OpenAI itself, etc. |
+| `COPILOT_MODEL` | `gemini-2.5-flash` | Server-controlled — the browser cannot override which model is billed. |
+
+**Guardrails:** the audit status dropdown, underwriter notes field, and "Save audit
+decision" button on the Inspector carry a `data-page-agent-not-interactive` attribute, so
+the agent can read them but cannot click or type into them — an AI copilot should not be
+able to write to the audit ledger unsupervised. The Risk Overview charts are SVG and
+unreadable as DOM text; `transformPageContent` in `copilot.js` appends their underlying
+JSON (LTV distribution, neighborhood concentration) to the agent's context so it can
+answer chart questions without guessing.
+
+**Reopening the widget:** the panel's own "X" button calls `agent.dispose()`, which is
+terminal — a disposed `PageAgent` can't be reused. `App.jsx` tracks this via the agent's
+`dispose` event and shows a "✦ Copilot" button in the header once the widget is closed,
+which spins up a fresh instance.
+
+**Activity log:** every history event (steps, retries, errors) is mirrored into the same
+`system_logs` ledger as the rest of the app via `logger.track('copilot', ...)` — query
+`GET /api/v1/logs?logger=copilot` to see what the agent has done. Note this persists
+reflection/action summaries (not the full page-content payload sent to the LLM, which only
+transits the network), so it's a smaller but real exposure of whatever's on screen when the
+agent acts — worth keeping in mind alongside the audit-ledger fencing above.
+
 ## Architecture
 
 ```
@@ -50,6 +94,7 @@ backend/app/
   main.py                  REST API (see below)
 frontend/src/
   logger.js                loglevel wrapper: human-readable console + remote shipping
+  copilot.js               page-agent setup: proxy baseURL, task context, chart summaries
   views/
     Dashboard.jsx          View 1 — exposure, avg LTV, triage count, LTV histogram,
                            neighborhood concentration chart
@@ -70,6 +115,7 @@ frontend/src/
 | GET | `/api/v1/properties/export` | Structural CSV download |
 | GET | `/api/v1/logs` | Query the unified operational/audit log ledger |
 | POST | `/api/v1/logs/client` | Ingest batched frontend (loglevel) log entries |
+| POST | `/api/v1/copilot/chat/completions` | AI copilot LLM proxy (see below) |
 
 ### Design notes
 

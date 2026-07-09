@@ -67,28 +67,29 @@ export default function PortfolioGrid({ onOpen, initialStatus }) {
       <div className="card p-3 flex flex-wrap gap-2 items-center">
         <input
           value={filters.search} onChange={set('search')} placeholder="Search PID or neighborhood"
+          aria-label="Search by PID or neighborhood"
           className="border border-line rounded-sm px-3 py-1.5 text-sm w-56 focus:outline-none focus:border-teal"
         />
-        <select value={filters.neighborhood} onChange={set('neighborhood')} className="border border-line rounded-sm px-2 py-1.5 text-sm bg-white">
+        <select value={filters.neighborhood} onChange={set('neighborhood')} aria-label="Filter by neighborhood" className="border border-line rounded-sm px-2 py-1.5 text-sm bg-white">
           <option value="">All neighborhoods</option>
           {opts?.neighborhoods.map((n) => <option key={n}>{n}</option>)}
         </select>
-        <select value={filters.bldg_type} onChange={set('bldg_type')} className="border border-line rounded-sm px-2 py-1.5 text-sm bg-white">
+        <select value={filters.bldg_type} onChange={set('bldg_type')} aria-label="Filter by property type" className="border border-line rounded-sm px-2 py-1.5 text-sm bg-white">
           <option value="">All property types</option>
           {opts?.bldg_types.map((n) => <option key={n}>{n}</option>)}
         </select>
-        <select value={filters.audit_status} onChange={set('audit_status')} className="border border-line rounded-sm px-2 py-1.5 text-sm bg-white">
+        <select value={filters.audit_status} onChange={set('audit_status')} aria-label="Filter by audit status" className="border border-line rounded-sm px-2 py-1.5 text-sm bg-white">
           <option value="">All audit statuses</option>
           {opts?.audit_statuses.map((n) => <option key={n}>{n}</option>)}
         </select>
-        <select value={filters.sort} onChange={set('sort')} className="border border-line rounded-sm px-2 py-1.5 text-sm bg-white ml-auto">
+        <select value={filters.sort} onChange={set('sort')} aria-label="Sort portfolio grid" className="border border-line rounded-sm px-2 py-1.5 text-sm bg-white ml-auto">
           <option value="ltv_desc">Highest LTV first</option>
           <option value="ltv_asc">Lowest LTV first</option>
           <option value="value_desc">Highest value first</option>
           <option value="value_asc">Lowest value first</option>
           <option value="pid">PID</option>
         </select>
-        <a href={api.exportUrl} className="text-sm text-teal hover:underline px-2">Download CSV</a>
+        <a href={api.exportUrl} aria-label="Download portfolio as CSV" className="text-sm text-teal hover:underline px-2">Download CSV</a>
       </div>
 
       {loading ? <Spinner label="Loading inventory…" /> : (
@@ -98,10 +99,10 @@ export default function PortfolioGrid({ onOpen, initialStatus }) {
             {data.items.map((p) => <Card key={p.pid} p={p} onOpen={onOpen} />)}
           </div>
           <div className="flex items-center justify-center gap-3 py-3 text-sm">
-            <button disabled={page <= 1} onClick={() => setPage(page - 1)}
+            <button disabled={page <= 1} onClick={() => setPage(page - 1)} aria-label="Previous page"
               className="px-3 py-1 border border-line rounded-sm disabled:opacity-40 bg-white">← Prev</button>
             <span className="figure text-inkmute">Page {page} / {pages}</span>
-            <button disabled={page >= pages} onClick={() => setPage(page + 1)}
+            <button disabled={page >= pages} onClick={() => setPage(page + 1)} aria-label="Next page"
               className="px-3 py-1 border border-line rounded-sm disabled:opacity-40 bg-white">Next →</button>
           </div>
         </>

@@ -1,9 +1,10 @@
-import React, { useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import Dashboard from './views/Dashboard.jsx'
 import PortfolioGrid from './views/PortfolioGrid.jsx'
 import Inspector from './views/Inspector.jsx'
 import MapView from './views/MapView.jsx'
 import { logger } from './logger.js'
+import { createCopilot } from './copilot.js'
 
 const TABS = [
   { id: 'dashboard', label: 'Risk Overview' },
@@ -15,6 +16,26 @@ export default function App() {
   const [view, setView] = useState('dashboard')
   const [pid, setPid] = useState(null)
   const [gridStatus, setGridStatus] = useState('')
+  const [copilotOpen, setCopilotOpen] = useState(true)
+  const copilotRef = useRef(null)
+
+  // Closing the widget's "X" button calls agent.dispose(), which is terminal — the only way
+  // back in is to spin up a fresh PageAgent, since a disposed one can't be reused.
+  const openCopilot = () => {
+    if (copilotRef.current && !copilotRef.current.disposed) {
+      copilotRef.current.panel.show()
+    } else {
+      const agent = createCopilot()
+      agent.addEventListener('dispose', () => setCopilotOpen(false))
+      copilotRef.current = agent
+    }
+    setCopilotOpen(true)
+  }
+
+  useEffect(() => {
+    openCopilot()
+    return () => copilotRef.current?.dispose()
+  }, [])
 
   const openProperty = (id) => {
     logger.track('app', `Opened property inspector for PID ${id}.`, null, id)
@@ -47,6 +68,12 @@ export default function App() {
               </button>
             ))}
           </nav>
+          {!copilotOpen && (
+            <button onClick={openCopilot} aria-label="Reopen AI copilot"
+              className="px-3 py-1.5 text-sm rounded-sm border border-white/20 text-white/80 hover:text-white hover:border-white/40 transition-colors">
+              ✦ Copilot
+            </button>
+          )}
         </div>
       </header>
 

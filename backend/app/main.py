@@ -1,15 +1,20 @@
 import csv
 import io
+import os
 import time
 from typing import Optional
 
+import httpx
+from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, joinedload
+
+load_dotenv()  # picks up a repo-root .env for local (non-Docker) runs; no-op if absent
 
 from . import inference
 from .db import Base, engine, get_db
@@ -318,6 +323,47 @@ def update_audit(pid: int, body: AuditUpdate, db: Session = Depends(get_db)):
 
     return {"pid": pid, "audit_status": meta.audit_status.value,
             "underwriter_notes": meta.underwriter_notes}
+
+
+# ---------- AI copilot proxy ----------
+# page-agent (frontend) speaks the OpenAI chat-completions schema. This proxy keeps the
+# real LLM API key server-side and lets us pin/swap the model without a frontend change.
+# page-agent's OpenAI client never sets `stream`, so this proxy is intentionally non-streaming.
+COPILOT_PROVIDER_BASE_URL = os.environ.get(
+    "COPILOT_PROVIDER_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai")
+COPILOT_PROVIDER_API_KEY = os.environ.get("COPILOT_PROVIDER_API_KEY", "")
+COPILOT_MODEL = os.environ.get("COPILOT_MODEL", "gemini-2.5-flash")
+copilot_http_client = httpx.AsyncClient(timeout=60)
+
+
+@app.on_event("shutdown")
+async def close_copilot_http_client():
+    await copilot_http_client.aclose()
+
+
+@app.post("/api/v1/copilot/chat/completions")
+async def copilot_chat_completions(request: Request):
+    if not COPILOT_PROVIDER_API_KEY:
+        raise HTTPException(503, "Copilot is not configured: set COPILOT_PROVIDER_API_KEY")
+    try:
+        body = await request.json()
+    except ValueError:
+        raise HTTPException(400, "Invalid JSON body")
+    if not isinstance(body, dict):
+        raise HTTPException(400, "Request body must be a JSON object")
+    body["model"] = COPILOT_MODEL  # the browser never chooses the model or sees the key
+    try:
+        upstream = await copilot_http_client.post(
+            f"{COPILOT_PROVIDER_BASE_URL}/chat/completions",
+            json=body,
+            headers={"Authorization": f"Bearer {COPILOT_PROVIDER_API_KEY}"},
+        )
+    except httpx.TimeoutException:
+        raise HTTPException(504, "Upstream LLM provider timed out")
+    except httpx.HTTPError as e:
+        raise HTTPException(502, f"Upstream LLM provider error: {e}")
+    return Response(content=upstream.content, status_code=upstream.status_code,
+                    media_type=upstream.headers.get("content-type", "application/json"))
 
 
 # ---------- logging / audit trail ----------

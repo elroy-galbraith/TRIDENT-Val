@@ -96,7 +96,7 @@ export default function Inspector({ pid, onBack, onOpen }) {
 
   return (
     <div className="space-y-4">
-      <button onClick={onBack} className="text-sm text-teal hover:underline">← Back to portfolio</button>
+      <button onClick={onBack} aria-label="Back to portfolio" className="text-sm text-teal hover:underline">← Back to portfolio</button>
 
       {/* Header strip */}
       <div className="card p-5 flex flex-wrap gap-6 items-center">
@@ -140,7 +140,7 @@ export default function Inspector({ pid, onBack, onOpen }) {
               <span>Overall Quality</span>
               <span className="figure font-semibold">{scenario.overall_qual}/10</span>
             </div>
-            <input type="range" min="1" max="10" value={scenario.overall_qual}
+            <input type="range" min="1" max="10" value={scenario.overall_qual} aria-label="Overall quality, 1 to 10"
               onChange={(e) => setF('overall_qual', +e.target.value)} className="w-full accent-teal" />
           </div>
 
@@ -150,13 +150,14 @@ export default function Inspector({ pid, onBack, onOpen }) {
               <span className="figure font-semibold">{scenario.gr_liv_area.toLocaleString()} sq ft</span>
             </div>
             <input type="range" min="400" max="4500" step="10" value={scenario.gr_liv_area}
+              aria-label="Above ground living area in square feet"
               onChange={(e) => setF('gr_liv_area', +e.target.value)} className="w-full accent-teal" />
           </div>
 
           <div>
             <div className="text-sm mb-1">Kitchen Quality</div>
             <select value={scenario.kitchen_qual} onChange={(e) => setF('kitchen_qual', +e.target.value)}
-              className="w-full border border-line rounded-sm px-2 py-1.5 text-sm bg-white">
+              aria-label="Kitchen quality" className="w-full border border-line rounded-sm px-2 py-1.5 text-sm bg-white">
               {QUAL_OPTS.map((o) => <option key={o.v} value={o.v}>{o.label}</option>)}
             </select>
           </div>
@@ -164,17 +165,18 @@ export default function Inspector({ pid, onBack, onOpen }) {
           <div>
             <div className="text-sm mb-1">Functional Deficiency</div>
             <select value={scenario.functional} onChange={(e) => setF('functional', +e.target.value)}
-              className="w-full border border-line rounded-sm px-2 py-1.5 text-sm bg-white">
+              aria-label="Functional deficiency rating" className="w-full border border-line rounded-sm px-2 py-1.5 text-sm bg-white">
               {FUNC_OPTS.map((o) => <option key={o.v} value={o.v}>{o.label}</option>)}
             </select>
           </div>
 
           <div className="flex gap-2 pt-1">
-            <button onClick={recalc} disabled={running}
+            <button onClick={recalc} disabled={running} aria-label="Recalculate valuation with current scenario"
               className="flex-1 bg-teal hover:bg-tealdeep text-white text-sm font-medium py-2 rounded-sm disabled:opacity-50">
               {running ? 'Scoring…' : 'Recalculate valuation'}
             </button>
-            <button onClick={resetScenario} className="px-3 border border-line rounded-sm text-sm bg-white">Reset</button>
+            <button onClick={resetScenario} aria-label="Reset scenario to original property values"
+              className="px-3 border border-line rounded-sm text-sm bg-white">Reset</button>
           </div>
 
           {/* Delta meter */}
@@ -215,6 +217,7 @@ export default function Inspector({ pid, onBack, onOpen }) {
               <StatusBadge status={status} />
             </div>
             <select value={status} onChange={(e) => setStatus(e.target.value)}
+              aria-label="Audit status" data-page-agent-not-interactive
               className="w-full border border-line rounded-sm px-2 py-1.5 text-sm bg-white">
               <option>Approved</option>
               <option>Pending Review</option>
@@ -222,8 +225,9 @@ export default function Inspector({ pid, onBack, onOpen }) {
             </select>
             <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={4}
               placeholder="Underwriter notes — shared risk commentary ledger"
+              aria-label="Underwriter audit notes" data-page-agent-not-interactive
               className="w-full border border-line rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-teal" />
-            <button onClick={saveAudit}
+            <button onClick={saveAudit} data-page-agent-not-interactive
               className="w-full bg-ink hover:bg-black text-white text-sm font-medium py-2 rounded-sm">
               {saved ? 'Saved ✓' : 'Save audit decision'}
             </button>
