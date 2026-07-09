@@ -6,3 +6,4 @@ nohup.out
 .venv/
 /logs/
 .env
+.DS_Store
