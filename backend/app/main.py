@@ -840,6 +840,16 @@ def run_revaluation(body: RevaluationRequest, db: Session = Depends(get_db),
     variance-vs-original-sale triage. This is a portfolio-wide write, gated the same as a
     triage decision (Underwriter/Admin), not Admin-only like model promotion: it's routine
     collateral monitoring, not a model risk decision."""
+    # Parsed first, before any query/setup work, so an invalid date fails fast — and made
+    # timezone-aware (naive ISO input defaults to UTC) to avoid PostgreSQL comparing it against
+    # the column's tz-aware values under an implicit offset.
+    try:
+        as_of = datetime.fromisoformat(body.as_of_date) if body.as_of_date else datetime.now(timezone.utc)
+    except ValueError:
+        raise HTTPException(422, "as_of_date must be an ISO date/datetime string")
+    if as_of.tzinfo is None:
+        as_of = as_of.replace(tzinfo=timezone.utc)
+
     neighborhoods = sorted({r[0] for r in db.query(Property.neighborhood).distinct() if r[0]})
     if not neighborhoods:
         raise HTTPException(400, "No properties on file — seed the portfolio first")
@@ -864,16 +874,14 @@ def run_revaluation(body: RevaluationRequest, db: Session = Depends(get_db),
             raise HTTPException(422, f"Unknown neighborhood(s): {unknown}")
         adjustments = {n: float(supplied.get(n, 0.0)) for n in neighborhoods}
     else:  # organic — deterministic per-(as_of_date, neighborhood) small drift, not a forecast
-        as_of_key = body.as_of_date or "auto"
+        # Falling back to a fixed literal here (e.g. "auto") would make every date-omitting
+        # caller draw the exact same "random" adjustments on every run; as_of.isoformat() carries
+        # microsecond resolution from datetime.now(), so omitted-date runs still get distinct seeds.
+        as_of_key = body.as_of_date or as_of.isoformat()
         adjustments = {
             n: round(random.Random(f"reval:{as_of_key}:{n}").uniform(*ORGANIC_DRIFT_RANGE), 4)
             for n in neighborhoods
         }
-
-    try:
-        as_of = datetime.fromisoformat(body.as_of_date) if body.as_of_date else datetime.now(timezone.utc)
-    except ValueError:
-        raise HTTPException(422, "as_of_date must be an ISO date/datetime string")
 
     champ = db.query(RegisteredModel).filter(RegisteredModel.status == ModelStatus.CHAMPION).one_or_none()
     run = RevaluationRun(

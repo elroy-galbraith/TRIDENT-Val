@@ -46,6 +46,13 @@ function RunForm({ neighborhoods, onRun, onCancel }) {
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState(null)
 
+  // neighborhoods loads asynchronously in the parent and can still be [] when this form first
+  // mounts, in which case the useState initializer above never sees a real default — sync it
+  // once the list arrives so a submit without touching the dropdown doesn't send an empty value.
+  useEffect(() => {
+    if (neighborhoods.length > 0 && !targetNeighborhood) setTargetNeighborhood(neighborhoods[0])
+  }, [neighborhoods, targetNeighborhood])
+
   const submit = async () => {
     setSubmitting(true)
     setError(null)
@@ -61,7 +68,7 @@ function RunForm({ neighborhoods, onRun, onCancel }) {
     if (scenarioType === 'custom') {
       body.custom_adjustments = Object.fromEntries(
         Object.entries(customAdjustments)
-          .filter(([, v]) => v !== '' && v != null)
+          .filter(([, v]) => v !== '' && v != null && !isNaN(Number(v)))
           .map(([k, v]) => [k, Number(v) / 100]))
     }
     try {
