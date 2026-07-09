@@ -1,6 +1,7 @@
 import csv
 import io
 import os
+import re
 import time
 from typing import Optional
 
@@ -203,11 +204,11 @@ def list_properties(
     if audit_status:
         q = q.filter(BankPortfolioMeta.audit_status == audit_status)
     if search:
-        if search.isdigit():
-            q = q.filter(or_(Property.neighborhood.ilike(f"%{search}%"),
-                             cast(Property.pid, String).like(f"%{search}%")))
-        else:
-            q = q.filter(Property.neighborhood.ilike(f"%{search}%"))
+        conditions = [Property.neighborhood.ilike(f"%{search}%")]
+        digits = re.sub(r"\D", "", search)
+        if digits:
+            conditions.append(cast(Property.pid, String).like(f"%{digits}%"))
+        q = q.filter(or_(*conditions))
 
     order = {
         "ltv_desc": (BankPortfolioMeta.current_loan_balance /
