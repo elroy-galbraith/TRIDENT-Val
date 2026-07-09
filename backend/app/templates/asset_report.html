@@ -17,6 +17,17 @@
 <h1>PID {{ pid }} — {{ asset_label }}</h1>
 <p class="muted">Built {{ prop.year_built }} · {{ "{:,}".format(total_sqft) }} sq ft total · {{ prop.bedroom_abvgr }} bed / {{ prop.full_bath }}{% if prop.half_bath %}.5{% endif %} bath</p>
 
+{% if images %}
+<div class="photo-grid avoid-break">
+  {% for img in images %}
+  <figure>
+    <img src="{{ img.url }}" alt="{{ img.label or ('Photo ' ~ loop.index) }}">
+    <figcaption>{{ img.label or ('Photo ' ~ loop.index) }}</figcaption>
+  </figure>
+  {% endfor %}
+</div>
+{% endif %}
+
 {% if meta.audit_status.value != "Approved" %}
 <div class="banner {% if meta.audit_status.value == 'Flagged: High Variance' %}banner-flag{% else %}banner-amber{% endif %}">
   <span class="strong">STATUS: {{ meta.audit_status.value }}.</span>

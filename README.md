@@ -29,12 +29,14 @@ docker compose up --build
 First boot trains nothing (the fitted models ship in `model/lgbm_v1/` and `model/linear_v1/`)
 and auto-seeds Postgres: 2,930 properties, simulated loan balances at 60–90% of baseline sale
 price, both models registered and shadow-scoring the whole portfolio, variance-based audit
-triage from the champion's valuation, deterministic Unsplash image mapping, and three demo
-user logins (see [Authentication & Roles](#authentication--roles-poc-grade)). Seeding is
-idempotent.
+triage from the champion's valuation, a deterministic multi-photo labeled Unsplash mapping
+per property, and three demo user logins (see
+[Authentication & Roles](#authentication--roles-poc-grade)). Seeding is idempotent.
 
-**Upgrading an existing checkout?** This adds a login and a new `users` table — see the
-fresh-database note in [Authentication & Roles](#authentication--roles-poc-grade) before
+**Upgrading an existing checkout?** This adds a login and a new `users` table, and reshapes
+`property_images` into a one-to-many, labeled table (`PropertyImage` gained `id`/`label`/
+`sort_order` columns) — see the fresh-database note in
+[Authentication & Roles](#authentication--roles-poc-grade) before
 you boot against an existing Postgres volume or `trident.db`.
 
 ## Quickstart — no Docker (SQLite fallback)
