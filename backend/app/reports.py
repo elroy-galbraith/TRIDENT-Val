@@ -276,8 +276,15 @@ def portfolio_report_context(db: Session, exported_by: User, champion_id: Option
     ltvs = [float(b) / float(v) for b, v in metas if v]
     ltv_buckets = [{"bucket": name, "count": sum(1 for l in ltvs if lo <= l < hi)}
                    for name, lo, hi in LTV_BUCKETS]
-    status_counts = {s.value: db.query(func.count(BankPortfolioMeta.pid)).filter(
-        BankPortfolioMeta.audit_status == s).scalar() for s in AuditStatus}
+    # One grouped query instead of one COUNT per AuditStatus. `if status` guards a row with a
+    # null audit_status the same way the old per-status `== s` filter did implicitly (it just
+    # never matched any `s`, so it silently didn't count toward any bucket).
+    status_rows = (db.query(BankPortfolioMeta.audit_status, func.count(BankPortfolioMeta.pid))
+                   .group_by(BankPortfolioMeta.audit_status).all())
+    status_counts = {s.value: 0 for s in AuditStatus}
+    for status, count in status_rows:
+        if status:
+            status_counts[status.value] = count
 
     geo_rows = (db.query(Property.neighborhood, func.count(Property.pid),
                          func.sum(BankPortfolioMeta.current_loan_balance))
@@ -299,7 +306,7 @@ def portfolio_report_context(db: Session, exported_by: User, champion_id: Option
         divergences, champ_err, chal_err = [], [], []
         seg: dict[str, dict] = {}
         for pid_, nbhd, sale_price, va_dec, vb_dec in rows:
-            va, vb, sale = float(va_dec), float(vb_dec), float(sale_price)
+            va, vb, sale = float(va_dec), float(vb_dec), float(sale_price) if sale_price is not None else 0.0
             divergence_pct = (vb - va) / va if va else 0.0
             divergences.append(abs(divergence_pct))
             champ_err.append(abs(va - sale) / sale if sale else 0.0)

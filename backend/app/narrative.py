@@ -60,6 +60,12 @@ markdown fences, no prose outside the JSON.
 """
 
 
+# Module-level and persistent so repeated report exports reuse one connection pool instead of
+# paying a fresh TCP/TLS handshake per narrative call — same rationale as the AsyncClient the
+# copilot proxy in app.main keeps alive for its own LLM calls.
+_client = httpx.Client(timeout=REPORT_LLM_TIMEOUT)
+
+
 def is_configured() -> bool:
     return bool(REPORT_LLM_API_KEY)
 
@@ -69,7 +75,7 @@ def _chat_json(user_content: str, max_tokens: int, log_context: dict) -> Optiona
     Returns None on any failure — every caller must have a grounded fallback ready."""
     start = time.perf_counter()
     try:
-        resp = httpx.post(
+        resp = _client.post(
             f"{REPORT_LLM_BASE_URL}/chat/completions",
             headers={
                 "Authorization": f"Bearer {REPORT_LLM_API_KEY}",
@@ -86,7 +92,6 @@ def _chat_json(user_content: str, max_tokens: int, log_context: dict) -> Optiona
                     {"role": "user", "content": user_content},
                 ],
             },
-            timeout=REPORT_LLM_TIMEOUT,
         )
         resp.raise_for_status()
         content = resp.json()["choices"][0]["message"]["content"]
