@@ -37,6 +37,23 @@ idempotent.
 fresh-database note in [Authentication & Roles](#authentication--roles-poc-grade) before
 you boot against an existing Postgres volume or `trident.db`.
 
+### Troubleshooting: `ResourceExhausted` / "no space left on device"
+
+This comes from Docker Desktop's own VM disk filling up, not from this repo's images —
+they're small (slim/alpine bases, no ML training at build time). It's almost always
+accumulated build cache and dangling layers from repeated `--build` runs. Reclaim space
+with:
+
+```bash
+docker builder prune -af      # build cache only
+docker system prune -af --volumes   # + unused images/containers/volumes (also drops pgdata — reseed after)
+```
+
+If it recurs, raise the disk image size in Docker Desktop under Settings → Resources →
+Advanced. The repo ships `.dockerignore` files (root + `frontend/`) so local-only
+directories like `node_modules`, `.venv`, and `trident.db` are never sent as build
+context in the first place.
+
 ## Quickstart — no Docker (SQLite fallback)
 
 ```bash

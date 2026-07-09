@@ -1,0 +1,17 @@
+# Build context here is ./frontend (see docker-compose.yml). Without this,
+# `COPY . .` in frontend/Dockerfile would overwrite the image's freshly
+# `npm install`-ed node_modules with whatever is on the host (often built for
+# a different OS/arch), and every build would re-tar it to the daemon.
+**/node_modules/
+**/dist/
+**/.vite/
+
+**/npm-debug.log*
+
+**/.env
+**/.env.*
+!**/.env.example
+
+**/.vscode/
+**/.idea/
+**/.DS_Store
