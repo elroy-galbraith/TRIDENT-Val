@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react'
+import About from './views/About.jsx'
 import Dashboard from './views/Dashboard.jsx'
 import PortfolioGrid from './views/PortfolioGrid.jsx'
 import Inspector from './views/Inspector.jsx'
@@ -15,6 +16,7 @@ import { createCopilot } from './copilot.js'
 import { api, setUnauthorizedHandler } from './api.js'
 
 const BASE_TABS = [
+  { id: 'about', label: 'About' },
   { id: 'dashboard', label: 'Risk Overview' },
   { id: 'portfolio', label: 'Portfolio' },
   { id: 'map', label: 'Map' },
@@ -33,7 +35,7 @@ function tabsForRole(role) {
 }
 
 const VIEW_IDS = new Set([
-  'dashboard', 'portfolio', 'map', 'revaluations', 'model-card', 'compare', 'my-queue', 'manager',
+  'about', 'dashboard', 'portfolio', 'map', 'revaluations', 'model-card', 'compare', 'my-queue', 'manager',
 ])
 
 function stateToPath({ view, pid, gridStatus }) {
@@ -50,7 +52,7 @@ function stateFromLocation() {
     const status = head === 'portfolio' ? new URLSearchParams(window.location.search).get('status') || '' : ''
     return { view: head, pid: null, gridStatus: status }
   }
-  return { view: 'dashboard', pid: null, gridStatus: '' }
+  return { view: 'about', pid: null, gridStatus: '' }
 }
 
 export default function App() {
@@ -64,6 +66,13 @@ export default function App() {
     setUnauthorizedHandler(() => setUser(null))
     api.me().then(setUser).catch(() => setUser(null))
   }, [])
+
+  // Always land on the About page right after signing in, regardless of whatever
+  // path/view was in the URL before login (e.g. a bookmarked deep link).
+  const handleLoggedIn = (loggedInUser) => {
+    setUser(loggedInUser)
+    navigate({ view: 'about', pid: null, gridStatus: '' }, { replace: true })
+  }
 
   const handleLogout = async () => {
     logger.track('auth', `Logged out '${user.username}'.`)
@@ -168,9 +177,10 @@ export default function App() {
 
       <main className="max-w-7xl mx-auto px-6 py-6">
         {user === undefined && <Spinner label="Checking session…" />}
-        {user === null && <Login onLoggedIn={setUser} />}
+        {user === null && <Login onLoggedIn={handleLoggedIn} />}
         {user && (
           <>
+            {view === 'about' && <About user={user} onNavigate={openTab} />}
             {view === 'dashboard' && (
               <Dashboard onTriage={openTriage} onOpen={openProperty}
                 onRevaluations={() => openTab('revaluations')} />
