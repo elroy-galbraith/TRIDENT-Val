@@ -132,6 +132,13 @@ PORTFOLIO_SCHEMA_HINT = """Return a JSON object with exactly this string key:
 audit triage outcomes, and champion/challenger model agreement, using only the figures in the \
 payload below."""
 
+REVALUATION_SCHEMA_HINT = """Return a JSON object with exactly this string key:
+- "executive_summary": 4-7 sentences summarizing this revaluation cycle: the scenario applied \
+(including which neighborhoods moved and by how much), the resulting shift in the LTV \
+distribution, and how many assets were newly flagged and why (value drop vs. LTV breach), \
+using only the figures in the payload below. Never speculate about future market movement — \
+describe only what this cycle's data shows."""
+
 
 def draft_asset_narrative(payload: dict, pid: int) -> dict:
     """Returns {variance_commentary, disagreement_commentary, notes_synthesis,
@@ -170,6 +177,23 @@ def draft_portfolio_narrative(payload: dict) -> dict:
     user_content = (
         f"{PORTFOLIO_SCHEMA_HINT}\n\nREPORT DATA (JSON):\n{json.dumps(payload, indent=2, default=str)}")
     result = _chat_json(user_content, max_tokens=500, log_context={"report_type": "portfolio"})
+    if result is None:
+        return fallback
+    return {"executive_summary": result.get("executive_summary") or fallback["executive_summary"]}
+
+
+def draft_revaluation_narrative(payload: dict, run_id: int) -> dict:
+    """Returns {executive_summary} — grounded LLM prose or a clearly-labeled placeholder."""
+    fallback = {
+        "executive_summary": NOT_CONFIGURED_MSG if not is_configured() else DRAFT_FAILED_MSG,
+    }
+    if not is_configured():
+        return fallback
+
+    user_content = (
+        f"{REVALUATION_SCHEMA_HINT}\n\nREPORT DATA (JSON):\n{json.dumps(payload, indent=2, default=str)}")
+    result = _chat_json(user_content, max_tokens=500,
+                        log_context={"report_type": "revaluation_cycle", "run_id": run_id})
     if result is None:
         return fallback
     return {"executive_summary": result.get("executive_summary") or fallback["executive_summary"]}

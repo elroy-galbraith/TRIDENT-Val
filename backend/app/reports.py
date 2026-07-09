@@ -25,7 +25,8 @@ from weasyprint import HTML
 
 from . import inference, narrative
 from .models import (AuditStatus, BankPortfolioMeta, ModelStatus, ModelValuation,
-                     Property, RegisteredModel, SystemLog, User)
+                     Property, RegisteredModel, RevaluationResult, RevaluationRun,
+                     SystemLog, User)
 
 # WeasyPrint logs unsupported-CSS-property warnings via stdlib logging at WARNING level;
 # left at the default it competes with loguru's console formatting for no operational value.
@@ -43,6 +44,15 @@ _env.filters["pct"] = lambda v, digits=1: "—" if v is None else f"{float(v) * 
 _env.filters["pct_signed"] = (
     lambda v, digits=1: "—" if v is None else f"{'+' if v >= 0 else ''}{float(v) * 100:.{digits}f}%")
 _env.filters["dt"] = lambda v: "—" if v is None else v.strftime("%Y-%m-%d %H:%M") + " UTC"
+
+
+def _flag_labels(reasons):
+    # FLAG_REASON_LABELS is defined further down this module; resolved at call time (after
+    # the module has fully loaded), not at this def, so the forward reference is safe.
+    return ", ".join(FLAG_REASON_LABELS.get(r, r) for r in (reasons or []))
+
+
+_env.filters["flag_labels"] = _flag_labels
 
 LTV_BUCKETS = [("<60%", 0.0, 0.60), ("60-80%", 0.60, 0.80), (">80%", 0.80, 99.0)]
 DISAGREEMENT_THRESHOLD = 0.10  # matches ModelCompare's default triage threshold
@@ -83,6 +93,38 @@ REPORT_STATUS_STATEMENT_PORTFOLIO = (
     "requires a Registered Valuer’s direct involvement."
 )
 
+REPORT_STATUS_STATEMENT_REVALUATION = (
+    "This is a periodic collateral revaluation cycle summary, produced by applying "
+    "neighborhood-level market index adjustments to each asset's previously booked AVM value "
+    "— it is not a fresh model-backed valuation opinion for any individual asset (that "
+    "requires a full re-inference or a model promotion, see the per-asset Decision Report) "
+    "and does not purport to be a RICS Red Book valuation report prepared by a Registered "
+    "Valuer. Assets this cycle flagged for review still require their own underwriter "
+    "decision, logged via the same audit lifecycle described in the per-asset report. This "
+    "document is structured in accordance with IVS 103 / RICS Red Book VPS 6 reporting "
+    "requirements — it is not represented as RICS-compliant, which requires a Registered "
+    "Valuer's direct involvement."
+)
+
+REVALUATION_METHODOLOGY = [
+    "Each cycle applies a neighborhood-level index adjustment to every asset's currently "
+    "booked AVM value, refreshing loan-to-value — the mechanism by which an AVM stays current "
+    "between full model-backed revaluations, comparable to HPI-indexed collateral updating in "
+    "conventional practice. It is not a market forecast: index adjustments are either "
+    "operator-specified (a named stress scenario) or a small auto-generated drift for a "
+    "standard cycle.",
+    "An asset is flagged by this cycle where its value dropped more than 10% since the prior "
+    "booked value, or where its LTV is at or above 80% after the cycle — a period-over-period "
+    "signal, distinct from (and additive to) the existing variance-vs-original-sale-price "
+    "triage described in the per-asset and portfolio reports.",
+    "A flag from this cycle escalates an asset's audit status to Flagged: High Variance "
+    "regardless of its variance against the original recorded sale price, so a stress "
+    "scenario visibly refills the triage queue even for assets that were otherwise Approved.",
+    "A cycle never changes which model or challenger is booked (resolved_model_id) — only a "
+    "triage decision or a model promotion does that. This cycle's new value is that same "
+    "resolved valuation, indexed for market movement since the last cycle.",
+]
+
 MODEL_LIMITATIONS = [
     "Trained on Ames, Iowa sales from 2006–2010 — not localized to any specific bank's "
     "actual markets. Treat estimates as directional, not a substitute for local comparable "
@@ -111,6 +153,12 @@ GOVERNANCE_METHODOLOGY = [
     "Promoting a challenger to champion is a separate, deliberate, admin-only act that "
     "re-books the whole portfolio in one pass; it is not a per-asset choice.",
 ]
+
+FLAG_REASON_LABELS = {
+    "value_drop_gt_10pct": "Value dropped >10%",
+    "ltv_crossed_80": "LTV newly crossed 80%",
+    "ltv_remains_gte_80": "LTV remains ≥80%",
+}
 
 STATUS_CLASS = {
     AuditStatus.APPROVED.value: "ok",
@@ -374,4 +422,88 @@ def render_portfolio_report_pdf(db: Session, exported_by: User, champion_id: Opt
                                 challenger_id: Optional[str] = None) -> bytes:
     ctx = portfolio_report_context(db, exported_by, champion_id, challenger_id)
     html = _env.get_template("portfolio_report.html").render(**ctx)
+    return HTML(string=html, base_url=str(TEMPLATES_DIR)).write_pdf()
+
+
+# ---------- revaluation cycle report ----------
+
+def revaluation_report_context(db: Session, run_id: int, exported_by: User) -> Optional[dict]:
+    run = db.query(RevaluationRun).get(run_id)
+    if not run:
+        return None
+    results = db.query(RevaluationResult).filter(RevaluationResult.run_id == run_id).all()
+    n = len(results) or 1
+    flagged = [r for r in results if r.flagged]
+    avg_delta = sum(r.value_delta_pct for r in results) / n if results else 0.0
+
+    ltv_before = [{"bucket": name, "count": sum(1 for r in results if lo <= r.prior_ltv < hi)}
+                  for name, lo, hi in LTV_BUCKETS]
+    ltv_after = [{"bucket": name, "count": sum(1 for r in results if lo <= r.new_ltv < hi)}
+                 for name, lo, hi in LTV_BUCKETS]
+
+    top_movers = sorted(results, key=lambda r: abs(r.value_delta_pct), reverse=True)[:15]
+    top_flagged = sorted(flagged, key=lambda r: abs(r.value_delta_pct), reverse=True)[:25]
+    mover_pids = [r.pid for r in top_movers] + [r.pid for r in top_flagged]
+    props = {p.pid: p for p in db.query(Property).filter(Property.pid.in_(set(mover_pids)))} if mover_pids else {}
+
+    model = db.query(RegisteredModel).get(run.model_id) if run.model_id else None
+
+    llm_payload = {
+        "cycle": {
+            "run_id": run.id, "as_of_date": run.as_of_date.isoformat() if run.as_of_date else None,
+            "scenario_name": run.scenario_name, "scenario_type": run.scenario_type.value,
+            "notes": run.notes or None,
+        },
+        "index_adjustments_by_neighborhood_pct": {
+            k: round(v, 4) for k, v in sorted(run.index_adjustments.items(),
+                                              key=lambda kv: abs(kv[1]), reverse=True)},
+        "assets_revalued": len(results),
+        "avg_value_delta_pct": round(avg_delta, 4),
+        "flagged_count": len(flagged),
+        "ltv_distribution_before": ltv_before,
+        "ltv_distribution_after": ltv_after,
+        "top_movers": [
+            {"pid": r.pid, "neighborhood": props[r.pid].neighborhood if r.pid in props else None,
+             "value_delta_pct": r.value_delta_pct, "new_ltv": r.new_ltv, "flagged": r.flagged,
+             "flag_reasons": r.flag_reasons}
+            for r in top_movers[:10]
+        ],
+    }
+    drafted = narrative.draft_revaluation_narrative(llm_payload, run_id)
+
+    return {
+        "run": run, "model": model,
+        "asset_count": len(results), "flagged_count": len(flagged),
+        "avg_value_delta_pct": avg_delta,
+        "index_adjustments": sorted(run.index_adjustments.items(), key=lambda kv: kv[0]),
+        "ltv_before": ltv_before, "ltv_after": ltv_after,
+        "top_movers": [
+            {"pid": r.pid, "neighborhood": props[r.pid].neighborhood if r.pid in props else None,
+             "prior_value": float(r.prior_value), "new_value": float(r.new_value),
+             "value_delta_pct": r.value_delta_pct, "new_ltv": r.new_ltv,
+             "flagged": r.flagged, "flag_reasons": r.flag_reasons or []}
+            for r in top_movers
+        ],
+        "flagged_assets": [
+            {"pid": r.pid, "neighborhood": props[r.pid].neighborhood if r.pid in props else None,
+             "value_delta_pct": r.value_delta_pct, "new_ltv": r.new_ltv,
+             "flag_reasons": r.flag_reasons or []}
+            for r in top_flagged
+        ],
+        "flagged_total": len(flagged),
+        "generated_at": datetime.now(timezone.utc),
+        "exported_by": exported_by,
+        "report_status_statement": REPORT_STATUS_STATEMENT_REVALUATION,
+        "revaluation_methodology": REVALUATION_METHODOLOGY,
+        "narrative": drafted,
+        "llm_used": narrative.is_configured(),
+        "llm_model_label": f"{narrative.REPORT_LLM_MODEL} (via OpenRouter)",
+    }
+
+
+def render_revaluation_report_pdf(db: Session, run_id: int, exported_by: User) -> Optional[bytes]:
+    ctx = revaluation_report_context(db, run_id, exported_by)
+    if ctx is None:
+        return None
+    html = _env.get_template("revaluation_report.html").render(**ctx)
     return HTML(string=html, base_url=str(TEMPLATES_DIR)).write_pdf()

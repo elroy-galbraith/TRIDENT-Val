@@ -1,6 +1,7 @@
 import csv
 import io
 import os
+import random
 import re
 import time
 from datetime import datetime, timezone
@@ -13,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, StreamingResponse
 from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import String, cast, func, or_
+from sqlalchemy import String, case, cast, func, or_
 from sqlalchemy.orm import Session, aliased, joinedload
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -24,7 +25,8 @@ from .auth import DUMMY_PASSWORD_HASH, get_current_user, require_role, verify_pa
 from .db import Base, engine, get_db
 from .logging_config import setup_logging
 from .models import (AuditStatus, BankPortfolioMeta, ModelStatus, ModelValuation,
-                     Property, RegisteredModel, SystemLog, User, UserRole)
+                     Property, RegisteredModel, RevaluationResult, RevaluationRun,
+                     ScenarioType, SystemLog, User, UserRole)
 
 setup_logging()
 
@@ -79,6 +81,20 @@ async def log_requests(request: Request, call_next):
 
 LTV_BUCKETS = [("<60%", 0.0, 0.60), ("60-80%", 0.60, 0.80), (">80%", 0.80, 99.0)]
 
+# ---------- revaluation cycle constants ----------
+# Small quarterly HPI-style noise per neighborhood for the "organic" (standard cycle) scenario —
+# deliberately not a market forecast, just enough drift to move LTV buckets and occasionally trip
+# a triage flag between deliberate stress runs, the way a real quarterly index update would.
+ORGANIC_DRIFT_RANGE = (-0.04, 0.04)
+REVAL_VALUE_DROP_FLAG = -0.10   # period-over-period value drop beyond this triggers a flag
+REVAL_LTV_FLAG = 0.80           # LTV at/above this after a cycle triggers a flag
+SCENARIO_LABELS = {
+    ScenarioType.ORGANIC.value: "Standard Quarterly Cycle",
+    ScenarioType.BROAD_STRESS.value: "Broad Market Stress",
+    ScenarioType.TARGETED_STRESS.value: "Concentrated Neighborhood Shock",
+    ScenarioType.CUSTOM.value: "Custom Scenario",
+}
+
 
 # ---------- schemas ----------
 
@@ -106,6 +122,20 @@ class TriageDecisionRequest(BaseModel):
     model_id: Optional[str] = Field(None, description="Required when decision == 'challenger'")
     manual_value: Optional[float] = Field(None, gt=0, description="Required when decision == 'manual'")
     rationale: str = Field(..., min_length=1)
+
+
+class RevaluationRequest(BaseModel):
+    as_of_date: Optional[str] = Field(None, description="ISO date/datetime; defaults to now")
+    scenario_type: str = Field("organic", pattern="^(organic|broad_stress|targeted_stress|custom)$")
+    scenario_name: Optional[str] = Field(None, description="Defaults to a label per scenario_type")
+    broad_shock_pct: Optional[float] = Field(
+        None, ge=-0.9, le=0.9, description="Required for broad_stress, e.g. -0.10 for -10%")
+    target_neighborhood: Optional[str] = Field(None, description="Required for targeted_stress")
+    target_shock_pct: Optional[float] = Field(
+        None, ge=-0.9, le=0.9, description="Required for targeted_stress")
+    custom_adjustments: Optional[dict[str, float]] = Field(
+        None, description="Required for custom: {neighborhood: pct}, omitted neighborhoods default to 0")
+    notes: Optional[str] = ""
 
 
 # ---------- helpers ----------
@@ -150,6 +180,25 @@ def model_row(m: RegisteredModel) -> dict:
         "holdout_mape": m.holdout_mape, "holdout_r2": m.holdout_r2,
         "trained_at": m.trained_at.isoformat() if m.trained_at else None,
         "promoted_at": m.promoted_at.isoformat() if m.promoted_at else None,
+    }
+
+
+def revaluation_run_row(run: RevaluationRun, agg: tuple) -> dict:
+    """agg = (asset_count, avg_value_delta_pct, flagged_count) from a grouped aggregate query —
+    see list_revaluations, which computes this once for every run instead of per-row queries."""
+    n, avg_delta, flagged = agg
+    return {
+        "run_id": run.id,
+        "as_of_date": run.as_of_date.isoformat() if run.as_of_date else None,
+        "scenario_name": run.scenario_name,
+        "scenario_type": run.scenario_type.value,
+        "model_id": run.model_id,
+        "created_by": run.created_by,
+        "created_at": run.created_at.isoformat() if run.created_at else None,
+        "notes": run.notes,
+        "asset_count": n or 0,
+        "avg_value_delta_pct": round(float(avg_delta), 4) if avg_delta is not None else 0.0,
+        "flagged_count": int(flagged or 0),
     }
 
 
@@ -773,6 +822,232 @@ def triage_decision(pid: int, body: TriageDecisionRequest, db: Session = Depends
     return {"pid": pid, "decision": body.decision, "resolved_model_id": new_model_id,
             "avm_value": float(meta.current_avm_value), "avm_variance_pct": meta.avm_variance_pct,
             "audit_status": meta.audit_status.value}
+
+
+# ---------- revaluation cycles ----------
+# The periodic collateral-monitoring loop: run a cycle -> LTV distribution shifts -> triage
+# queue refills -> underwriters work the queue (existing audit/triage endpoints above) -> cycle
+# report exports. Market movement between cycles is injected as neighborhood-level index
+# adjustments (see RevaluationRun docstring), never a market/time-series forecast.
+
+@app.post("/api/v1/revaluations")
+def run_revaluation(body: RevaluationRequest, db: Session = Depends(get_db),
+                    user: User = Depends(require_role(UserRole.UNDERWRITER, UserRole.ADMIN))):
+    """Execute a new revaluation cycle: apply this run's neighborhood index adjustments to
+    every asset's currently booked AVM value, refresh LTV, and flag assets whose
+    period-over-period movement itself is a risk signal — a value drop beyond
+    REVAL_VALUE_DROP_FLAG or an LTV at/above REVAL_LTV_FLAG — on top of the existing
+    variance-vs-original-sale triage. This is a portfolio-wide write, gated the same as a
+    triage decision (Underwriter/Admin), not Admin-only like model promotion: it's routine
+    collateral monitoring, not a model risk decision."""
+    neighborhoods = sorted({r[0] for r in db.query(Property.neighborhood).distinct() if r[0]})
+    if not neighborhoods:
+        raise HTTPException(400, "No properties on file — seed the portfolio first")
+
+    scenario_type = body.scenario_type
+    if scenario_type == ScenarioType.BROAD_STRESS.value:
+        if body.broad_shock_pct is None:
+            raise HTTPException(422, "broad_shock_pct is required for a broad_stress scenario")
+        adjustments = {n: float(body.broad_shock_pct) for n in neighborhoods}
+    elif scenario_type == ScenarioType.TARGETED_STRESS.value:
+        if not body.target_neighborhood or body.target_shock_pct is None:
+            raise HTTPException(422, "target_neighborhood and target_shock_pct are required "
+                                     "for a targeted_stress scenario")
+        if body.target_neighborhood not in neighborhoods:
+            raise HTTPException(422, f"Unknown neighborhood {body.target_neighborhood!r}")
+        adjustments = {n: (float(body.target_shock_pct) if n == body.target_neighborhood else 0.0)
+                       for n in neighborhoods}
+    elif scenario_type == ScenarioType.CUSTOM.value:
+        supplied = body.custom_adjustments or {}
+        unknown = sorted(set(supplied) - set(neighborhoods))
+        if unknown:
+            raise HTTPException(422, f"Unknown neighborhood(s): {unknown}")
+        adjustments = {n: float(supplied.get(n, 0.0)) for n in neighborhoods}
+    else:  # organic — deterministic per-(as_of_date, neighborhood) small drift, not a forecast
+        as_of_key = body.as_of_date or "auto"
+        adjustments = {
+            n: round(random.Random(f"reval:{as_of_key}:{n}").uniform(*ORGANIC_DRIFT_RANGE), 4)
+            for n in neighborhoods
+        }
+
+    try:
+        as_of = datetime.fromisoformat(body.as_of_date) if body.as_of_date else datetime.now(timezone.utc)
+    except ValueError:
+        raise HTTPException(422, "as_of_date must be an ISO date/datetime string")
+
+    champ = db.query(RegisteredModel).filter(RegisteredModel.status == ModelStatus.CHAMPION).one_or_none()
+    run = RevaluationRun(
+        as_of_date=as_of, scenario_type=scenario_type,
+        scenario_name=body.scenario_name or SCENARIO_LABELS[scenario_type],
+        index_adjustments=adjustments, notes=body.notes or "",
+        model_id=champ.id if champ else None, created_by=user.username,
+    )
+    db.add(run)
+
+    rows = (db.query(Property, BankPortfolioMeta)
+            .join(BankPortfolioMeta, BankPortfolioMeta.pid == Property.pid).all())
+    flagged_count = 0
+    value_deltas = []
+    for prop, meta in rows:
+        prior_value = float(meta.current_avm_value)
+        prior_ltv = float(meta.current_loan_balance) / prior_value if prior_value else 0.0
+        idx = adjustments.get(prop.neighborhood, 0.0)
+        new_value = round(prior_value * (1 + idx), 2)
+        new_ltv = float(meta.current_loan_balance) / new_value if new_value else 0.0
+        value_delta_pct = (new_value - prior_value) / prior_value if prior_value else 0.0
+        ltv_delta = new_ltv - prior_ltv
+        value_deltas.append(value_delta_pct)
+
+        reasons = []
+        if value_delta_pct <= REVAL_VALUE_DROP_FLAG:
+            reasons.append("value_drop_gt_10pct")
+        if new_ltv >= REVAL_LTV_FLAG:
+            reasons.append("ltv_crossed_80" if prior_ltv < REVAL_LTV_FLAG else "ltv_remains_gte_80")
+        flagged = bool(reasons)
+        if flagged:
+            flagged_count += 1
+
+        sale = float(prop.sale_price) if prop.sale_price else 0.0
+        variance = (new_value - sale) / sale if sale else 0.0
+        base_status = (
+            AuditStatus.FLAGGED_HIGH_VARIANCE if abs(variance) > 0.15 else
+            AuditStatus.PENDING_REVIEW if abs(variance) > 0.08 else AuditStatus.APPROVED)
+        status_after = AuditStatus.FLAGGED_HIGH_VARIANCE if flagged else base_status
+
+        meta.current_avm_value = new_value
+        meta.avm_variance_pct = round(variance, 4)
+        meta.audit_status = status_after
+
+        db.add(RevaluationResult(
+            pid=prop.pid, prior_value=prior_value, new_value=new_value,
+            value_delta_pct=round(value_delta_pct, 4), prior_ltv=round(prior_ltv, 4),
+            new_ltv=round(new_ltv, 4), ltv_delta=round(ltv_delta, 4),
+            flagged=flagged, flag_reasons=reasons, audit_status_after=status_after,
+            run=run,
+        ))
+
+    db.commit()
+    avg_delta = sum(value_deltas) / len(value_deltas) if value_deltas else 0.0
+
+    logger.bind(actor=user.username, context={
+        "run_id": run.id, "scenario_type": scenario_type, "scenario_name": run.scenario_name,
+        "assets_revalued": len(rows), "flagged_count": flagged_count,
+        "avg_value_delta_pct": round(avg_delta, 4),
+    }).info("Revaluation cycle #{run_id} ({scenario}) completed: {n} assets, {flagged} flagged.",
+           run_id=run.id, scenario=run.scenario_name, n=len(rows), flagged=flagged_count)
+
+    return {"run_id": run.id, "scenario_name": run.scenario_name, "assets_revalued": len(rows),
+            "flagged_count": flagged_count, "avg_value_delta_pct": round(avg_delta, 4)}
+
+
+@app.get("/api/v1/revaluations")
+def list_revaluations(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """Cycle history, newest first, with per-run summary stats aggregated in one grouped
+    query rather than one query per run."""
+    runs = db.query(RevaluationRun).order_by(RevaluationRun.id.desc()).all()
+    if not runs:
+        return {"items": []}
+    agg_rows = (db.query(
+            RevaluationResult.run_id, func.count(RevaluationResult.id),
+            func.avg(RevaluationResult.value_delta_pct),
+            func.sum(case((RevaluationResult.flagged.is_(True), 1), else_=0)),
+        ).group_by(RevaluationResult.run_id).all())
+    agg_by_run = {r[0]: r[1:] for r in agg_rows}
+    return {"items": [revaluation_run_row(r, agg_by_run.get(r.id, (0, 0.0, 0))) for r in runs]}
+
+
+@app.get("/api/v1/revaluations/{run_id}")
+def get_revaluation(run_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """One cycle's full detail: the index adjustments actually applied, before/after LTV
+    distribution, and the largest movers — backs the Revaluation Cycles run-detail panel."""
+    run = db.query(RevaluationRun).get(run_id)
+    if not run:
+        raise HTTPException(404, "Revaluation run not found")
+    results = db.query(RevaluationResult).filter(RevaluationResult.run_id == run_id).all()
+    n = len(results) or 1
+    flagged = sum(1 for r in results if r.flagged)
+    avg_delta = sum(r.value_delta_pct for r in results) / n
+
+    ltv_before = [{"bucket": name, "count": sum(1 for r in results if lo <= r.prior_ltv < hi)}
+                  for name, lo, hi in LTV_BUCKETS]
+    ltv_after = [{"bucket": name, "count": sum(1 for r in results if lo <= r.new_ltv < hi)}
+                 for name, lo, hi in LTV_BUCKETS]
+
+    top_movers = sorted(results, key=lambda r: abs(r.value_delta_pct), reverse=True)[:10]
+    mover_pids = [r.pid for r in top_movers]
+    props = {p.pid: p for p in db.query(Property).filter(Property.pid.in_(mover_pids))} if mover_pids else {}
+
+    return {
+        "run_id": run.id, "as_of_date": run.as_of_date.isoformat() if run.as_of_date else None,
+        "scenario_name": run.scenario_name, "scenario_type": run.scenario_type.value,
+        "model_id": run.model_id, "created_by": run.created_by,
+        "created_at": run.created_at.isoformat() if run.created_at else None,
+        "notes": run.notes, "index_adjustments": run.index_adjustments,
+        "asset_count": len(results), "flagged_count": flagged,
+        "avg_value_delta_pct": round(avg_delta, 4),
+        "ltv_distribution_before": ltv_before, "ltv_distribution_after": ltv_after,
+        "top_movers": [
+            {"pid": r.pid, "neighborhood": props[r.pid].neighborhood if r.pid in props else None,
+             "prior_value": float(r.prior_value), "new_value": float(r.new_value),
+             "value_delta_pct": r.value_delta_pct, "prior_ltv": r.prior_ltv, "new_ltv": r.new_ltv,
+             "flagged": r.flagged, "flag_reasons": r.flag_reasons}
+            for r in top_movers
+        ],
+    }
+
+
+@app.get("/api/v1/revaluations/{run_id}/flagged")
+def revaluation_flagged(
+    run_id: int, page: int = Query(1, ge=1), page_size: int = Query(24, ge=1, le=100),
+    db: Session = Depends(get_db), user: User = Depends(get_current_user),
+):
+    """The triage queue this cycle refilled: assets flagged for a period-over-period value
+    drop or an LTV breach, ranked by |value_delta_pct|. Asset cards reflect current (not
+    as-of-this-run) state, since later cycles or triage decisions may have moved on since."""
+    if not db.query(RevaluationRun.id).filter(RevaluationRun.id == run_id).scalar():
+        raise HTTPException(404, "Revaluation run not found")
+    rows = (db.query(RevaluationResult, Property)
+            .join(Property, Property.pid == RevaluationResult.pid)
+            .options(joinedload(Property.meta), joinedload(Property.image))
+            .filter(RevaluationResult.run_id == run_id, RevaluationResult.flagged.is_(True))
+            .all())
+    items = [
+        {**card(p), "value_delta_pct": r.value_delta_pct, "prior_value": float(r.prior_value),
+         "new_value": float(r.new_value), "prior_ltv": r.prior_ltv, "new_ltv": r.new_ltv,
+         "flag_reasons": r.flag_reasons}
+        for r, p in rows
+    ]
+    items.sort(key=lambda it: abs(it["value_delta_pct"]), reverse=True)
+    total = len(items)
+    start = (page - 1) * page_size
+    return {"run_id": run_id, "total": total, "page": page, "page_size": page_size,
+            "items": items[start:start + page_size]}
+
+
+@app.get("/api/v1/revaluations/{run_id}/report")
+def revaluation_report(run_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """Revaluation Cycle Report (PDF): scenario, index adjustments applied, LTV distribution
+    shift, and the flagged/top-mover assets from this cycle, with an AI-drafted executive
+    summary grounded on that same data — same IVS 103 / Red Book framing and LLM-narrates-
+    never-computes guarantee as the other exported reports (see app.reports)."""
+    start = time.perf_counter()
+    try:
+        pdf_bytes = reports.render_revaluation_report_pdf(db, run_id, user)
+    except Exception as e:
+        logger.bind(actor=user.username, context={"run_id": run_id, "error": str(e)}).error(
+            "Revaluation cycle report generation failed for run {run_id}: {error}",
+            run_id=run_id, error=str(e))
+        raise HTTPException(500, "Report generation failed")
+    if pdf_bytes is None:
+        raise HTTPException(404, "Revaluation run not found")
+    latency_ms = round((time.perf_counter() - start) * 1000, 1)
+    logger.bind(actor=user.username, context={
+        "report_type": "revaluation_cycle", "run_id": run_id, "generation_ms": latency_ms,
+    }).info("Exported revaluation cycle report for run {run_id} ({latency}ms).",
+           run_id=run_id, latency=latency_ms)
+    return Response(
+        content=pdf_bytes, media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="trident-val_revaluation_cycle_{run_id}.pdf"'})
 
 
 # ---------- AI copilot proxy ----------
