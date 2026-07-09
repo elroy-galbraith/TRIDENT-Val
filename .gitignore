@@ -2,7 +2,15 @@ node_modules/
 dist/
 __pycache__/
 *.db
+*.duckdb
 nohup.out
 .venv/
 /logs/
 .env
+
+# Generated demo data — recreated by scripts/generate_ingestion_sources.py and
+# scripts/generate_synthetic_reports.py; not source, don't commit.
+/ingestion/dropzone/
+/ingestion/.dlt_staging/
+/vendor_api/records_seed.json
+/data/synthetic_reports/

@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+{% if style == 'legacy_urar' %}
+<style>
+  @page { size: Letter; margin: 1.6cm; }
+  body { font-family: "Liberation Mono", "DejaVu Sans Mono", monospace; font-size: 9.5pt; color: #111; }
+  .banner { border: 2.5pt solid #000; padding: 6pt 8pt; margin-bottom: 10pt; text-align: center;
+            font-weight: bold; letter-spacing: 0.5pt; }
+  h1 { font-size: 12pt; text-align: center; text-transform: uppercase; letter-spacing: 1pt;
+       border-bottom: 1.5pt solid #000; padding-bottom: 4pt; margin-bottom: 2pt; }
+  .subtitle { text-align: center; font-size: 8.5pt; margin-bottom: 10pt; }
+  table.form { width: 100%; border-collapse: collapse; margin-bottom: 10pt; }
+  table.form td, table.form th { border: 0.75pt solid #000; padding: 3pt 5pt; vertical-align: top; }
+  table.form th { background: #eee; text-align: left; width: 38%; font-weight: bold; }
+  .section-title { font-weight: bold; text-transform: uppercase; font-size: 9pt; margin: 10pt 0 3pt; }
+  .signoff { margin-top: 16pt; border-top: 1pt solid #000; padding-top: 6pt; font-size: 8.5pt; }
+  .footer { margin-top: 14pt; font-size: 7.5pt; color: #333; }
+</style>
+{% else %}
+<style>
+  @page { size: Letter; margin: 1.8cm; }
+  body { font-family: "Liberation Sans", Arial, sans-serif; font-size: 10pt; color: #16211D; }
+  .banner { border: 1.5pt solid #B3352C; background: #FBEAE8; padding: 8pt 10pt; margin-bottom: 12pt;
+            text-align: center; font-weight: 600; color: #7A241D; border-radius: 3pt; }
+  h1 { font-size: 16pt; font-weight: 600; margin-bottom: 2pt; }
+  .subtitle { color: #5B6B77; font-size: 9.5pt; margin-bottom: 12pt; }
+  table.form { width: 100%; border-collapse: collapse; margin-bottom: 12pt; }
+  table.form td, table.form th { border-bottom: 0.75pt solid #DDE3E0; padding: 4pt 6pt; text-align: left; }
+  table.form th { color: #5B6B77; font-weight: 500; width: 40%; }
+  .section-title { font-weight: 600; font-size: 10.5pt; margin: 12pt 0 4pt; color: #14453C; }
+  .signoff { margin-top: 18pt; border-top: 0.75pt solid #DDE3E0; padding-top: 8pt; font-size: 9pt; color: #5B6B77; }
+  .footer { margin-top: 16pt; font-size: 7.5pt; color: #90A19A; }
+</style>
+{% endif %}
+</head>
+<body>
+  <div class="banner">
+    SYNTHETIC DOCUMENT — generated from the public Ames Housing dataset to measure extraction
+    accuracy against known ground truth. Not a real appraisal, survey, or valuation.
+  </div>
+
+  {% if style == 'legacy_urar' %}
+  <h1>Residential Property Valuation Survey</h1>
+  <div class="subtitle">Report Ref. TV-SYN-{{ "%09d"|format(pid) }} &middot; Prepared for demonstration purposes only</div>
+  {% else %}
+  <h1>Residential Valuation Summary</h1>
+  <div class="subtitle">Property {{ pid }} &middot; Synthetic report, TRIDENT-Val extraction-accuracy corpus</div>
+  {% endif %}
+
+  <div class="section-title">Subject Property</div>
+  <table class="form">
+    <tr><th>Parcel / Property ID</th><td>{{ pid }}</td></tr>
+    <tr><th>Neighborhood</th><td>{{ neighborhood }}</td></tr>
+    <tr><th>Building Type</th><td>{{ bldg_type }}</td></tr>
+    <tr><th>House Style</th><td>{{ house_style }}</td></tr>
+    <tr><th>Year Built</th><td>{{ year_built }}</td></tr>
+    <tr><th>Zoning Classification</th><td>{{ ms_zoning }}</td></tr>
+  </table>
+
+  <div class="section-title">Condition &amp; Quality</div>
+  <table class="form">
+    <tr><th>Overall Quality (1&ndash;10)</th><td>{{ overall_qual }}</td></tr>
+    <tr><th>Overall Condition (1&ndash;10)</th><td>{{ overall_cond }}</td></tr>
+  </table>
+
+  <div class="section-title">Accommodation</div>
+  <table class="form">
+    <tr><th>Gross Living Area (sq ft)</th><td>{{ gr_liv_area }}</td></tr>
+    <tr><th>Total Basement Area (sq ft)</th><td>{{ total_bsmt_sf }}</td></tr>
+    <tr><th>Full Bathrooms</th><td>{{ full_bath }}</td></tr>
+    <tr><th>Half Bathrooms</th><td>{{ half_bath }}</td></tr>
+    <tr><th>Bedrooms (above grade)</th><td>{{ bedroom_abvgr }}</td></tr>
+  </table>
+
+  <div class="section-title">Valuation</div>
+  <table class="form">
+    <tr><th>Appraised Value (USD)</th><td>${{ "{:,.0f}".format(sale_price) }}</td></tr>
+    <tr><th>Valuation Date</th><td>{{ inspection_date }}</td></tr>
+    <tr><th>Surveyor / Reviewer</th><td>{{ surveyor_name }}</td></tr>
+  </table>
+
+  {% if notes %}
+  <div class="section-title">Notes</div>
+  <p>{{ notes }}</p>
+  {% endif %}
+
+  <div class="signoff">
+    Prepared by {{ surveyor_name }} for demonstration purposes as part of the TRIDENT-Val
+    extraction-accuracy corpus. This document is not a professional valuation opinion and
+    creates no reliance of any kind.
+  </div>
+
+  <div class="footer">
+    Generated {{ generated_at.strftime("%Y-%m-%d %H:%M") }} UTC by TRIDENT-Val &middot;
+    style={{ style }} &middot; source data: Ames Housing Dataset (De Cock, 2011)
+  </div>
+</body>
+</html>

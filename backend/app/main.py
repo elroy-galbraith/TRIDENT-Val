@@ -3,8 +3,10 @@ import io
 import os
 import random
 import re
+import sys
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 
 import httpx
@@ -20,13 +22,25 @@ from starlette.middleware.sessions import SessionMiddleware
 
 load_dotenv()  # picks up a repo-root .env for local (non-Docker) runs; no-op if absent
 
-from . import inference, reports
+# The top-level ingestion/ package (dlt pipelines — see that package's docstrings) lives
+# alongside backend/, scripts/, etc., not inside this app package, so it needs the repo root
+# on sys.path — same explicit-insert convention scripts/seed_db.py uses for its own imports.
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from . import extraction, inference, reports, synthetic_reports
 from .auth import DUMMY_PASSWORD_HASH, get_current_user, require_role, verify_password
+from .degrade import degrade_pdf
 from .db import Base, engine, get_db
 from .logging_config import setup_logging
-from .models import (AuditStatus, BankPortfolioMeta, ModelStatus, ModelValuation,
-                     Property, PropertyImage, RegisteredModel, RevaluationResult,
-                     RevaluationRun, ScenarioType, SystemLog, User, UserRole)
+from .models import (AuditStatus, BankPortfolioMeta, ExtractionFieldResult, ExtractionRun,
+                     ExtractionRunStatus, IngestionQuarantine, IngestionRun, ModelStatus,
+                     ModelValuation, Property, PropertyImage, PropertySourceRecord,
+                     RegisteredModel, RevaluationResult, RevaluationRun, ScenarioType,
+                     SourceSystem, SyntheticDocument, SyntheticReportStyle, SystemLog,
+                     User, UserRole)
+from ingestion.pipeline import run_sync as ingestion_run_sync
 
 setup_logging()
 
@@ -136,6 +150,26 @@ class RevaluationRequest(BaseModel):
     custom_adjustments: Optional[dict[str, float]] = Field(
         None, description="Required for custom: {neighborhood: pct}, omitted neighborhoods default to 0")
     notes: Optional[str] = ""
+
+
+class IngestionSyncRequest(BaseModel):
+    source_system: str = Field(
+        ..., pattern="^(core_banking|valuation_vendor|valuations_team|all)$",
+        description="One source system, or 'all' to sync every source in one call")
+
+
+class QuarantineResolveRequest(BaseModel):
+    resolution_notes: str = Field("", description="How this quarantined record was resolved")
+
+
+class DocumentGenerateRequest(BaseModel):
+    pids: list[int] = Field(..., min_length=1, max_length=50)
+    style: str = Field("legacy_urar", pattern="^(modern|legacy_urar)$")
+    degrade: bool = Field(False, description="Simulate a scanned/photocopied paper document")
+
+
+class TriageFieldResolveRequest(BaseModel):
+    resolution: str = Field(..., min_length=1, description="The corrected/confirmed value or note")
 
 
 # ---------- helpers ----------
@@ -826,6 +860,344 @@ def triage_decision(pid: int, body: TriageDecisionRequest, db: Session = Depends
     return {"pid": pid, "decision": body.decision, "resolved_model_id": new_model_id,
             "avm_value": float(meta.current_avm_value), "avm_variance_pct": meta.avm_variance_pct,
             "audit_status": meta.audit_status.value}
+
+
+# ---------- data ingestion (dlt) ----------
+# Multi-source ingestion demo: three fake "source systems" (a core-banking-style CSV drop, a
+# mock valuation-vendor API, a valuations-team spreadsheet — see the top-level ingestion/
+# package and scripts/generate_ingestion_sources.py) land through a dlt pipeline into a
+# canonical provenance ledger, with malformed rows quarantined rather than silently dropped.
+# dlt only ever refreshes BankPortfolioMeta.current_loan_balance (core_banking only) — it
+# never touches current_avm_value/avm_variance_pct/audit_status, so a sync can't silently
+# perturb the AVM/triage numbers the rest of the app's demo depends on.
+
+def ingestion_run_row(run: IngestionRun) -> dict:
+    return {
+        "run_id": run.id, "source_system": run.source_system.value, "status": run.status.value,
+        "started_at": run.started_at.isoformat() if run.started_at else None,
+        "completed_at": run.completed_at.isoformat() if run.completed_at else None,
+        "records_seen": run.records_seen, "records_loaded": run.records_loaded,
+        "records_quarantined": run.records_quarantined,
+        "schema_columns_added": run.schema_columns_added,
+        "triggered_by": run.triggered_by, "error": run.error,
+    }
+
+
+@app.post("/api/v1/ingestion/sync")
+def sync_ingestion(body: IngestionSyncRequest, db: Session = Depends(get_db),
+                   user: User = Depends(require_role(UserRole.UNDERWRITER, UserRole.ADMIN))):
+    """Trigger a dlt sync for one source system, or every source via source_system="all".
+    Synchronous — matches the rest of the app's heavy-but-synchronous operations (report
+    generation, revaluation cycles)."""
+    targets = list(SourceSystem) if body.source_system == "all" else [SourceSystem(body.source_system)]
+    runs = []
+    for source_system in targets:
+        try:
+            run = ingestion_run_sync(db, source_system, user.username)
+        except Exception as e:
+            logger.bind(actor=user.username, context={
+                "source_system": source_system.value, "error": str(e),
+            }).error("Ingestion sync failed for {source}: {error}",
+                    source=source_system.value, error=str(e))
+            raise HTTPException(500, f"Sync failed for {source_system.value}: {e}")
+        runs.append(run)
+        logger.bind(actor=user.username, context={
+            "run_id": run.id, "source_system": source_system.value,
+            "records_loaded": run.records_loaded, "records_quarantined": run.records_quarantined,
+            "schema_columns_added": run.schema_columns_added,
+        }).info("Ingestion sync #{run_id} ({source}): {loaded} loaded, {quarantined} quarantined.",
+               run_id=run.id, source=source_system.value, loaded=run.records_loaded,
+               quarantined=run.records_quarantined)
+    return {"runs": [ingestion_run_row(r) for r in runs]}
+
+
+@app.get("/api/v1/ingestion/runs")
+def list_ingestion_runs(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    runs = db.query(IngestionRun).order_by(IngestionRun.id.desc()).limit(100).all()
+    return {"items": [ingestion_run_row(r) for r in runs]}
+
+
+@app.get("/api/v1/ingestion/runs/{run_id}")
+def get_ingestion_run(run_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    run = db.query(IngestionRun).get(run_id)
+    if not run:
+        raise HTTPException(404, "Ingestion run not found")
+    return ingestion_run_row(run)
+
+
+@app.get("/api/v1/ingestion/records")
+def list_ingestion_records(
+    source_system: Optional[str] = None, pid: Optional[int] = None,
+    page: int = Query(1, ge=1), page_size: int = Query(25, ge=1, le=100),
+    db: Session = Depends(get_db), user: User = Depends(get_current_user),
+):
+    q = db.query(PropertySourceRecord)
+    if source_system:
+        q = q.filter(PropertySourceRecord.source_system == SourceSystem(source_system))
+    if pid is not None:
+        q = q.filter(PropertySourceRecord.pid == pid)
+    total = q.count()
+    rows = (q.order_by(PropertySourceRecord.loaded_at.desc())
+           .offset((page - 1) * page_size).limit(page_size).all())
+    items = [{
+        "pid": r.pid, "source_system": r.source_system.value, "source_record_id": r.source_record_id,
+        "ingestion_run_id": r.ingestion_run_id, "loaded_at": r.loaded_at.isoformat() if r.loaded_at else None,
+        "raw_payload": r.raw_payload, "mapped_fields": r.mapped_fields,
+    } for r in rows]
+    return {"total": total, "page": page, "page_size": page_size, "items": items}
+
+
+@app.get("/api/v1/ingestion/quarantine")
+def list_quarantine(
+    source_system: Optional[str] = None, resolved: Optional[bool] = None,
+    page: int = Query(1, ge=1), page_size: int = Query(25, ge=1, le=100),
+    db: Session = Depends(get_db), user: User = Depends(get_current_user),
+):
+    q = db.query(IngestionQuarantine)
+    if source_system:
+        q = q.filter(IngestionQuarantine.source_system == SourceSystem(source_system))
+    if resolved is not None:
+        q = q.filter(IngestionQuarantine.resolved.is_(resolved))
+    total = q.count()
+    rows = (q.order_by(IngestionQuarantine.detected_at.desc())
+           .offset((page - 1) * page_size).limit(page_size).all())
+    items = [{
+        "id": r.id, "source_system": r.source_system.value, "ingestion_run_id": r.ingestion_run_id,
+        "raw_record": r.raw_record, "reason_code": r.reason_code, "reason_detail": r.reason_detail,
+        "detected_at": r.detected_at.isoformat() if r.detected_at else None,
+        "resolved": r.resolved, "resolved_by": r.resolved_by,
+        "resolved_at": r.resolved_at.isoformat() if r.resolved_at else None,
+        "resolution_notes": r.resolution_notes,
+    } for r in rows]
+    return {"total": total, "page": page, "page_size": page_size, "items": items}
+
+
+@app.post("/api/v1/ingestion/quarantine/{quarantine_id}/resolve")
+def resolve_quarantine(quarantine_id: int, body: QuarantineResolveRequest, db: Session = Depends(get_db),
+                       user: User = Depends(require_role(UserRole.UNDERWRITER, UserRole.ADMIN))):
+    rec = db.query(IngestionQuarantine).get(quarantine_id)
+    if not rec:
+        raise HTTPException(404, "Quarantined record not found")
+    rec.resolved = True
+    rec.resolved_by = user.username
+    rec.resolved_at = datetime.now(timezone.utc)
+    rec.resolution_notes = body.resolution_notes
+    db.commit()
+
+    logger.bind(actor=user.username, context={
+        "quarantine_id": quarantine_id, "source_system": rec.source_system.value,
+        "reason_code": rec.reason_code, "resolution_notes": body.resolution_notes,
+    }).info("Underwriter resolved quarantined record #{id} ({source}, {reason}).",
+           id=quarantine_id, source=rec.source_system.value, reason=rec.reason_code)
+    return {"id": quarantine_id, "resolved": True, "resolved_by": user.username}
+
+
+# ---------- document intake (synthetic reports + Docling extraction) ----------
+# Extraction-accuracy demo: synthetic valuation-report PDFs are generated from Ames property
+# records (see app.synthetic_reports) — sometimes degraded to simulate an old scanned document
+# (see app.degrade) — then run through Docling (layout/OCR) + an LLM (structured extraction
+# only, see app.extraction) and scored against the known ground truth. Every document is
+# clearly disclosed as synthetic, both in the PDF itself and in the API/UI.
+
+def document_row(doc: SyntheticDocument) -> dict:
+    return {
+        "id": doc.id, "pid": doc.pid, "style": doc.style.value, "degraded": doc.degraded,
+        "degradation_method": doc.degradation_method, "file_path": doc.file_path,
+        "ground_truth": doc.ground_truth,
+        "generated_at": doc.generated_at.isoformat() if doc.generated_at else None,
+        "generated_by": doc.generated_by,
+    }
+
+
+def extraction_run_row(run: ExtractionRun, include_fields: bool = False) -> dict:
+    out = {
+        "run_id": run.id, "document_id": run.document_id, "status": run.status.value,
+        "started_at": run.started_at.isoformat() if run.started_at else None,
+        "completed_at": run.completed_at.isoformat() if run.completed_at else None,
+        "docling_latency_ms": run.docling_latency_ms, "llm_latency_ms": run.llm_latency_ms,
+        "llm_used": run.llm_used, "overall_field_accuracy": run.overall_field_accuracy,
+        "error": run.error, "triggered_by": run.triggered_by,
+    }
+    if include_fields:
+        out["fields"] = [{
+            "id": f.id, "field_name": f.field_name, "extracted_value": f.extracted_value,
+            "ground_truth_value": f.ground_truth_value, "match": f.match, "confidence": f.confidence,
+            "routed_to_triage": f.routed_to_triage, "triage_resolved": f.triage_resolved,
+            "triage_resolution": f.triage_resolution,
+        } for f in run.fields]
+    return out
+
+
+@app.post("/api/v1/documents/generate")
+def generate_documents(body: DocumentGenerateRequest, db: Session = Depends(get_db),
+                       user: User = Depends(require_role(UserRole.UNDERWRITER, UserRole.ADMIN))):
+    style = SyntheticReportStyle(body.style)
+    synthetic_reports.DOCS_DIR.mkdir(parents=True, exist_ok=True)
+    created = []
+    for pid in body.pids:
+        result = synthetic_reports.render_synthetic_report_pdf(db, pid, style)
+        if result is None:
+            continue
+        pdf_bytes, ground_truth = result
+        degradation_method = None
+        if body.degrade:
+            pdf_bytes = degrade_pdf(pdf_bytes, seed=str(pid))
+            degradation_method = "img2pdf_photocopy_v1"
+        suffix = "degraded" if body.degrade else "clean"
+        path = synthetic_reports.DOCS_DIR / f"{pid}_{style.value}_{suffix}_{int(time.time())}.pdf"
+        path.write_bytes(pdf_bytes)
+        doc = SyntheticDocument(
+            pid=pid, style=style, degraded=body.degrade, degradation_method=degradation_method,
+            file_path=str(path.relative_to(_REPO_ROOT)), ground_truth=ground_truth,
+            generated_by=user.username,
+        )
+        db.add(doc)
+        db.flush()
+        created.append(doc)
+    db.commit()
+
+    logger.bind(actor=user.username, context={
+        "pids_requested": body.pids, "documents_created": len(created), "style": style.value,
+        "degraded": body.degrade,
+    }).info("Generated {n} synthetic document(s) ({style}, degraded={degraded}).",
+           n=len(created), style=style.value, degraded=body.degrade)
+    return {"documents": [document_row(d) for d in created]}
+
+
+@app.get("/api/v1/documents")
+def list_documents(
+    degraded: Optional[bool] = None, style: Optional[str] = None,
+    page: int = Query(1, ge=1), page_size: int = Query(25, ge=1, le=100),
+    db: Session = Depends(get_db), user: User = Depends(get_current_user),
+):
+    q = db.query(SyntheticDocument)
+    if degraded is not None:
+        q = q.filter(SyntheticDocument.degraded.is_(degraded))
+    if style:
+        q = q.filter(SyntheticDocument.style == SyntheticReportStyle(style))
+    total = q.count()
+    rows = (q.order_by(SyntheticDocument.id.desc())
+           .offset((page - 1) * page_size).limit(page_size).all())
+    return {"total": total, "page": page, "page_size": page_size,
+            "items": [document_row(d) for d in rows]}
+
+
+@app.post("/api/v1/documents/{document_id}/extract")
+def run_extraction(document_id: int, db: Session = Depends(get_db),
+                   user: User = Depends(require_role(UserRole.UNDERWRITER, UserRole.ADMIN))):
+    """Runs Docling + LLM extraction for one synthetic document. Docling requires a working
+    model download from HuggingFace on first use in this deployment — if that (or the LLM
+    call) fails, the ExtractionRun is still recorded as failed with the error message rather
+    than silently vanishing; this endpoint surfaces it as a 502 pointing at that run."""
+    try:
+        run = extraction.extract_document(db, document_id, user.username)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    except Exception as e:
+        raise HTTPException(502, f"Extraction failed — see the run detail for diagnostics: {e}")
+    return extraction_run_row(run, include_fields=True)
+
+
+@app.get("/api/v1/extraction/runs")
+def list_extraction_runs(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    runs = db.query(ExtractionRun).order_by(ExtractionRun.id.desc()).limit(100).all()
+    return {"items": [extraction_run_row(r) for r in runs]}
+
+
+@app.get("/api/v1/extraction/runs/{run_id}")
+def get_extraction_run(run_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    run = db.query(ExtractionRun).get(run_id)
+    if not run:
+        raise HTTPException(404, "Extraction run not found")
+    return extraction_run_row(run, include_fields=True)
+
+
+@app.get("/api/v1/extraction/accuracy")
+def extraction_accuracy(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """Dashboard aggregate: overall/clean/degraded field accuracy and a per-field breakdown —
+    "we extracted X% of fields correctly and flagged the ones we weren't sure about,"
+    measurable because every synthetic document carries its own known ground truth."""
+    rows = (db.query(ExtractionFieldResult, ExtractionRun, SyntheticDocument)
+            .join(ExtractionRun, ExtractionRun.id == ExtractionFieldResult.run_id)
+            .join(SyntheticDocument, SyntheticDocument.id == ExtractionRun.document_id)
+            .filter(ExtractionRun.status == ExtractionRunStatus.SUCCEEDED)
+            .all())
+    if not rows:
+        return {"overall_accuracy": None, "clean_accuracy": None, "degraded_accuracy": None,
+                "per_field": [], "runs_scored": 0, "triage_queue_size": 0}
+
+    scored = [(fr, doc) for fr, run, doc in rows if fr.match is not None]
+
+    def accuracy_of(pairs):
+        return (sum(1 for fr, _ in pairs if fr.match) / len(pairs)) if pairs else None
+
+    clean_scored = [(fr, doc) for fr, doc in scored if not doc.degraded]
+    degraded_scored = [(fr, doc) for fr, doc in scored if doc.degraded]
+
+    per_field: dict = {}
+    for fr, _run, _doc in rows:
+        if fr.match is None:
+            continue
+        stat = per_field.setdefault(fr.field_name, {"n": 0, "correct": 0})
+        stat["n"] += 1
+        stat["correct"] += 1 if fr.match else 0
+    per_field_list = sorted(
+        [{"field": name, "accuracy": s["correct"] / s["n"], "n": s["n"]} for name, s in per_field.items()],
+        key=lambda x: x["field"])
+
+    triage_queue_size = db.query(ExtractionFieldResult).filter(
+        ExtractionFieldResult.routed_to_triage.is_(True),
+        ExtractionFieldResult.triage_resolved.is_(False)).count()
+
+    return {
+        "overall_accuracy": accuracy_of(scored), "clean_accuracy": accuracy_of(clean_scored),
+        "degraded_accuracy": accuracy_of(degraded_scored), "per_field": per_field_list,
+        "runs_scored": len({run.id for _fr, run, _doc in rows}), "triage_queue_size": triage_queue_size,
+    }
+
+
+@app.get("/api/v1/extraction/triage")
+def list_extraction_triage(
+    resolved: Optional[bool] = None, page: int = Query(1, ge=1), page_size: int = Query(25, ge=1, le=100),
+    db: Session = Depends(get_db), user: User = Depends(get_current_user),
+):
+    q = db.query(ExtractionFieldResult, ExtractionRun, SyntheticDocument) \
+        .join(ExtractionRun, ExtractionRun.id == ExtractionFieldResult.run_id) \
+        .join(SyntheticDocument, SyntheticDocument.id == ExtractionRun.document_id) \
+        .filter(ExtractionFieldResult.routed_to_triage.is_(True))
+    if resolved is not None:
+        q = q.filter(ExtractionFieldResult.triage_resolved.is_(resolved))
+    total = q.count()
+    rows = (q.order_by(ExtractionFieldResult.id.desc())
+           .offset((page - 1) * page_size).limit(page_size).all())
+    items = [{
+        "id": fr.id, "run_id": fr.run_id, "document_id": doc.id, "pid": doc.pid,
+        "field_name": fr.field_name, "extracted_value": fr.extracted_value,
+        "ground_truth_value": fr.ground_truth_value, "match": fr.match, "confidence": fr.confidence,
+        "degraded": doc.degraded, "triage_resolved": fr.triage_resolved,
+        "triage_resolution": fr.triage_resolution, "resolved_by": fr.resolved_by,
+    } for fr, run, doc in rows]
+    return {"total": total, "page": page, "page_size": page_size, "items": items}
+
+
+@app.post("/api/v1/extraction/triage/{field_result_id}/resolve")
+def resolve_extraction_triage(field_result_id: int, body: TriageFieldResolveRequest,
+                              db: Session = Depends(get_db),
+                              user: User = Depends(require_role(UserRole.UNDERWRITER, UserRole.ADMIN))):
+    fr = db.query(ExtractionFieldResult).get(field_result_id)
+    if not fr:
+        raise HTTPException(404, "Extraction field result not found")
+    fr.triage_resolved = True
+    fr.triage_resolution = body.resolution
+    fr.resolved_by = user.username
+    fr.resolved_at = datetime.now(timezone.utc)
+    db.commit()
+
+    logger.bind(actor=user.username, context={
+        "field_result_id": field_result_id, "field_name": fr.field_name, "resolution": body.resolution,
+    }).info("Underwriter resolved extraction triage field #{id} ({field}).",
+           id=field_result_id, field=fr.field_name)
+    return {"id": field_result_id, "resolved": True, "resolved_by": user.username}
 
 
 # ---------- revaluation cycles ----------

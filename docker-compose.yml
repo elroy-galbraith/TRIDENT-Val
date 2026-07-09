@@ -12,12 +12,20 @@ services:
       interval: 3s
       retries: 20
 
+  vendor-api:
+    build:
+      context: .
+      dockerfile: vendor_api/Dockerfile
+    ports:
+      - "8001:8001"
+
   backend:
     build:
       context: .
       dockerfile: backend/Dockerfile
     environment:
       DATABASE_URL: postgresql+psycopg2://trident:trident_poc@db:5432/trident
+      VENDOR_API_BASE_URL: http://vendor-api:8001
       COPILOT_PROVIDER_BASE_URL: ${COPILOT_PROVIDER_BASE_URL:-https://generativelanguage.googleapis.com/v1beta/openai}
       COPILOT_PROVIDER_API_KEY: ${COPILOT_PROVIDER_API_KEY:-}
       COPILOT_MODEL: ${COPILOT_MODEL:-gemini-2.5-flash}
@@ -29,6 +37,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      vendor-api:
+        condition: service_started
     ports:
       - "8000:8000"
 

@@ -32,6 +32,25 @@ export function ModelStatusBadge({ status }) {
   )
 }
 
+const sourceSystemStyle = {
+  'core_banking': 'bg-tealdeep/10 text-tealdeep border-tealdeep/30',
+  'valuation_vendor': 'bg-teal/10 text-teal border-teal/30',
+  'valuations_team': 'bg-amber/10 text-amber border-amber/30',
+}
+const sourceSystemLabel = {
+  'core_banking': 'Core Banking',
+  'valuation_vendor': 'Valuation Vendor',
+  'valuations_team': 'Valuations Team',
+}
+
+export function SourceSystemBadge({ source }) {
+  return (
+    <span className={`inline-block px-2 py-0.5 text-[11px] font-medium border rounded-sm ${sourceSystemStyle[source] || ''}`}>
+      {sourceSystemLabel[source] || source}
+    </span>
+  )
+}
+
 export function LtvChip({ ltv }) {
   const tier = ltvTier(ltv)
   return (

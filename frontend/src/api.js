@@ -82,6 +82,25 @@ export const api = {
   revaluationFlagged: (runId, params) => get(`/revaluations/${runId}/flagged?${new URLSearchParams(params)}`),
   runRevaluation: (body) => send('POST', '/revaluations', body, 'revaluation cycle failed'),
   revaluationReportUrl: (runId) => `${BASE}/revaluations/${runId}/report`,
+  ingestionSync: (sourceSystem) =>
+    send('POST', '/ingestion/sync', { source_system: sourceSystem }, 'ingestion sync failed'),
+  ingestionRuns: () => get('/ingestion/runs'),
+  ingestionRun: (runId) => get(`/ingestion/runs/${runId}`),
+  ingestionRecords: (params) => get(`/ingestion/records?${new URLSearchParams(params)}`),
+  ingestionQuarantine: (params) => get(`/ingestion/quarantine?${new URLSearchParams(params)}`),
+  resolveQuarantine: (id, resolution_notes) =>
+    send('POST', `/ingestion/quarantine/${id}/resolve`, { resolution_notes }, 'quarantine resolution failed'),
+  generateDocuments: (pids, style, degrade) =>
+    send('POST', '/documents/generate', { pids, style, degrade }, 'document generation failed'),
+  documents: (params) => get(`/documents?${new URLSearchParams(params)}`),
+  runExtraction: (documentId) =>
+    send('POST', `/documents/${documentId}/extract`, {}, 'extraction failed'),
+  extractionRuns: () => get('/extraction/runs'),
+  extractionRun: (runId) => get(`/extraction/runs/${runId}`),
+  extractionAccuracy: () => get('/extraction/accuracy'),
+  extractionTriage: (params) => get(`/extraction/triage?${new URLSearchParams(params)}`),
+  resolveExtractionTriage: (id, resolution) =>
+    send('POST', `/extraction/triage/${id}/resolve`, { resolution }, 'triage resolution failed'),
 }
 
 export const usd = (n, digits = 0) =>

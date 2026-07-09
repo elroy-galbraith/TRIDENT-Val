@@ -6,6 +6,8 @@ import MapView from './views/MapView.jsx'
 import ModelCard from './views/ModelCard.jsx'
 import ModelCompare from './views/ModelCompare.jsx'
 import RevaluationCycles from './views/RevaluationCycles.jsx'
+import DataIngestion from './views/DataIngestion.jsx'
+import DocumentIntake from './views/DocumentIntake.jsx'
 import Login from './views/Login.jsx'
 import { Spinner } from './components/shared.jsx'
 import { logger } from './logger.js'
@@ -17,11 +19,13 @@ const TABS = [
   { id: 'portfolio', label: 'Portfolio' },
   { id: 'map', label: 'Map' },
   { id: 'revaluations', label: 'Revaluation Cycles' },
+  { id: 'ingestion', label: 'Data Ingestion' },
+  { id: 'documents', label: 'Document Intake' },
   { id: 'model-card', label: 'Model Card' },
   { id: 'compare', label: 'Compare' },
 ]
 
-const VIEW_IDS = new Set(['dashboard', 'portfolio', 'map', 'revaluations', 'model-card', 'compare'])
+const VIEW_IDS = new Set(['dashboard', 'portfolio', 'map', 'revaluations', 'ingestion', 'documents', 'model-card', 'compare'])
 
 function stateToPath({ view, pid, gridStatus }) {
   if (view === 'inspector' && pid != null) return `/inspector/${encodeURIComponent(pid)}`
@@ -167,6 +171,8 @@ export default function App() {
             )}
             {view === 'map' && <MapView onOpen={openProperty} />}
             {view === 'revaluations' && <RevaluationCycles user={user} onOpen={openProperty} />}
+            {view === 'ingestion' && <DataIngestion user={user} />}
+            {view === 'documents' && <DocumentIntake user={user} />}
             {view === 'model-card' && (
               <ModelCard user={user} onBrowse={() => openTab('portfolio')} onCompare={() => openTab('compare')} />
             )}
