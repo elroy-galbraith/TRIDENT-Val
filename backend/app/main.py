@@ -1072,6 +1072,24 @@ COPILOT_PROVIDER_API_KEY = os.environ.get("COPILOT_PROVIDER_API_KEY", "")
 COPILOT_MODEL = os.environ.get("COPILOT_MODEL", "gemini-2.5-flash")
 copilot_http_client = httpx.AsyncClient(timeout=60)
 
+# Per-user sliding-window cap so one logged-in account can't run up the upstream LLM
+# bill on its own (auth alone only keeps out anonymous callers). In-memory counters are
+# fine for this PoC's single-process deployment; a multi-worker deploy would need a
+# shared store (e.g. Redis) instead.
+COPILOT_RATE_LIMIT_PER_MINUTE = int(os.environ.get("COPILOT_RATE_LIMIT_PER_MINUTE", "20"))
+copilot_request_log: dict[int, list[float]] = {}
+
+
+def _check_copilot_rate_limit(user_id: int) -> None:
+    now = time.monotonic()
+    window_start = now - 60
+    timestamps = [t for t in copilot_request_log.get(user_id, []) if t > window_start]
+    if len(timestamps) >= COPILOT_RATE_LIMIT_PER_MINUTE:
+        copilot_request_log[user_id] = timestamps
+        raise HTTPException(429, "Copilot rate limit exceeded; please slow down.")
+    timestamps.append(now)
+    copilot_request_log[user_id] = timestamps
+
 
 @app.on_event("shutdown")
 async def close_copilot_http_client():
@@ -1082,6 +1100,7 @@ async def close_copilot_http_client():
 async def copilot_chat_completions(request: Request, user: User = Depends(get_current_user)):
     if not COPILOT_PROVIDER_API_KEY:
         raise HTTPException(503, "Copilot is not configured: set COPILOT_PROVIDER_API_KEY")
+    _check_copilot_rate_limit(user.id)
     try:
         body = await request.json()
     except ValueError:
