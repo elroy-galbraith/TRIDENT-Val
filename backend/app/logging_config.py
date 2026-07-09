@@ -41,8 +41,12 @@ def _db_sink(message):
                 message=record["message"],
                 pid=extra.get("pid"),
                 context=extra.get("context"),
+                actor=extra.get("actor"),
             ))
             db.commit()
+        except Exception:
+            db.rollback()
+            raise
         finally:
             db.close()
     except Exception:

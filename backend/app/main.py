@@ -14,18 +14,35 @@ from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import String, cast, func, or_
 from sqlalchemy.orm import Session, joinedload
+from starlette.middleware.sessions import SessionMiddleware
 
 load_dotenv()  # picks up a repo-root .env for local (non-Docker) runs; no-op if absent
 
 from . import inference
+from .auth import DUMMY_PASSWORD_HASH, get_current_user, require_role, verify_password
 from .db import Base, engine, get_db
 from .logging_config import setup_logging
-from .models import AuditStatus, BankPortfolioMeta, Property, SystemLog
+from .models import AuditStatus, BankPortfolioMeta, Property, SystemLog, User, UserRole
 
 setup_logging()
 
 app = FastAPI(title="TRIDENT-Val AVM & Risk Triage Engine", version="1.0-poc")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
+# Signed-cookie session for the PoC login (see app.auth). The frontend never calls the
+# backend cross-origin (Vite/nginx both proxy /api same-origin), so a plain cookie
+# session needs no CORS credentials plumbing. SESSION_SECRET falls back to a known,
+# non-secret PoC placeholder (matches the docker-compose Postgres password convention)
+# so the app still boots locally; rotate it before any non-local use.
+SESSION_SECRET = os.environ.get("SESSION_SECRET") or "trident-poc-insecure-default-change-me"
+if not os.environ.get("SESSION_SECRET"):
+    logger.warning("SESSION_SECRET is not set; using an insecure PoC-only default. "
+                   "Set SESSION_SECRET before any non-local use.")
+# Defaults to False so the cookie still works over plain http://localhost; flip to true
+# once this sits behind real HTTPS so the browser refuses to send the cookie over http.
+SESSION_COOKIE_SECURE = os.environ.get("SESSION_COOKIE_SECURE", "false").lower() == "true"
+app.add_middleware(SessionMiddleware, secret_key=SESSION_SECRET, max_age=60 * 60 * 8,
+                   https_only=SESSION_COOKIE_SECURE)
 
 
 @app.on_event("startup")
@@ -72,6 +89,11 @@ class AuditUpdate(BaseModel):
     underwriter_notes: Optional[str] = None
 
 
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
 # ---------- helpers ----------
 
 def map_point(p: Property) -> dict:
@@ -89,6 +111,10 @@ def map_point(p: Property) -> dict:
         "ltv": round(float(p.meta.current_loan_balance) / avm_value, 4) if avm_value else 0.0,
         "audit_status": p.meta.audit_status.value,
     }
+
+
+def user_out(u: User) -> dict:
+    return {"username": u.username, "role": u.role.value}
 
 
 def comp_score(subject: Property, candidate: Property) -> float:
@@ -130,8 +156,41 @@ def health():
     return {"status": "ok"}
 
 
+@app.post("/api/v1/auth/login")
+def login(body: LoginRequest, request: Request, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.username == body.username).first()
+    # `password_ok` must be computed unconditionally, outside the `if` below — `or` would
+    # short-circuit and skip verify_password entirely when user is None, making "user not
+    # found" respond faster than "wrong password" and leaking which usernames exist via
+    # response timing. Checking against a dummy hash keeps both paths equally slow.
+    password_hash = user.password_hash if user else DUMMY_PASSWORD_HASH
+    password_ok = verify_password(body.password, password_hash)
+    if user is None or not password_ok:
+        logger.bind(context={"attempted_username": body.username}).warning(
+            "Failed login attempt for username '{username}'.", username=body.username)
+        raise HTTPException(401, "Invalid username or password")
+    request.session.clear()
+    request.session["user_id"] = user.id
+    request.session["username"] = user.username
+    logger.bind(actor=user.username, context={"role": user.role.value}).info(
+        "User '{username}' logged in.", username=user.username)
+    return user_out(user)
+
+
+@app.post("/api/v1/auth/logout")
+def logout(request: Request, user: User = Depends(get_current_user)):
+    logger.bind(actor=user.username).info("User '{username}' logged out.", username=user.username)
+    request.session.clear()
+    return {"status": "ok"}
+
+
+@app.get("/api/v1/auth/me")
+def me(user: User = Depends(get_current_user)):
+    return user_out(user)
+
+
 @app.get("/api/v1/model/spec")
-def model_spec():
+def model_spec(user: User = Depends(get_current_user)):
     return inference.get_spec()
 
 
@@ -139,7 +198,7 @@ _importance_cache: Optional[dict] = None
 
 
 @app.get("/api/v1/model/importance")
-def model_importance(db: Session = Depends(get_db)):
+def model_importance(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """Global feature importance for the Model Card page, cached after the first request —
     property feature vectors are immutable after seeding, so re-scoring the whole portfolio
     on every page load would be wasted work."""
@@ -153,7 +212,7 @@ def model_importance(db: Session = Depends(get_db)):
 
 
 @app.get("/api/v1/portfolio/summary")
-def portfolio_summary(db: Session = Depends(get_db)):
+def portfolio_summary(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     exposure, valuation, n = db.query(
         func.sum(BankPortfolioMeta.current_loan_balance),
         func.sum(BankPortfolioMeta.current_avm_value),
@@ -195,7 +254,7 @@ def portfolio_summary(db: Session = Depends(get_db)):
 
 
 @app.get("/api/v1/portfolio/map")
-def portfolio_map(db: Session = Depends(get_db)):
+def portfolio_map(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     rows = db.query(Property).join(BankPortfolioMeta).options(joinedload(Property.meta)).all()
     points = [map_point(p) for p in rows]
     return {"count": len(points), "points": points}
@@ -204,6 +263,7 @@ def portfolio_map(db: Session = Depends(get_db)):
 @app.get("/api/v1/properties")
 def list_properties(
     db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
     neighborhood: Optional[str] = None,
     bldg_type: Optional[str] = None,
     audit_status: Optional[AuditStatus] = None,
@@ -244,7 +304,7 @@ def list_properties(
 
 
 @app.get("/api/v1/properties/filters")
-def filter_options(db: Session = Depends(get_db)):
+def filter_options(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     hoods = [r[0] for r in db.query(Property.neighborhood).distinct().order_by(Property.neighborhood)]
     types = [r[0] for r in db.query(Property.bldg_type).distinct().order_by(Property.bldg_type)]
     return {"neighborhoods": hoods, "bldg_types": types,
@@ -252,7 +312,7 @@ def filter_options(db: Session = Depends(get_db)):
 
 
 @app.get("/api/v1/properties/export")
-def export_csv(db: Session = Depends(get_db)):
+def export_csv(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     rows = db.query(Property).join(BankPortfolioMeta).options(
         joinedload(Property.meta)).order_by(Property.pid).all()
     buf = io.StringIO()
@@ -269,7 +329,7 @@ def export_csv(db: Session = Depends(get_db)):
 
 
 @app.get("/api/v1/properties/{pid}")
-def get_property(pid: int, db: Session = Depends(get_db)):
+def get_property(pid: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     p = db.query(Property).options(joinedload(Property.meta),
                                    joinedload(Property.image)).get(pid)
     if not p:
@@ -287,7 +347,8 @@ def get_property(pid: int, db: Session = Depends(get_db)):
 
 
 @app.get("/api/v1/properties/{pid}/comps")
-def get_comps(pid: int, limit: int = Query(6, ge=1, le=20), db: Session = Depends(get_db)):
+def get_comps(pid: int, limit: int = Query(6, ge=1, le=20), db: Session = Depends(get_db),
+             user: User = Depends(get_current_user)):
     subject = db.query(Property).options(joinedload(Property.meta)).get(pid)
     if not subject:
         raise HTTPException(404, "Property not found")
@@ -303,7 +364,7 @@ def get_comps(pid: int, limit: int = Query(6, ge=1, le=20), db: Session = Depend
 
 
 @app.post("/api/v1/valuate")
-def valuate(req: ValuateRequest):
+def valuate(req: ValuateRequest, user: User = Depends(get_current_user)):
     start = time.perf_counter()
     try:
         result = inference.valuate_with_drivers(req.features)
@@ -322,7 +383,8 @@ def valuate(req: ValuateRequest):
 
 
 @app.patch("/api/v1/properties/{pid}/audit")
-def update_audit(pid: int, body: AuditUpdate, db: Session = Depends(get_db)):
+def update_audit(pid: int, body: AuditUpdate, db: Session = Depends(get_db),
+                 user: User = Depends(require_role(UserRole.UNDERWRITER, UserRole.ADMIN))):
     meta = db.query(BankPortfolioMeta).get(pid)
     if not meta:
         raise HTTPException(404, "Property not found")
@@ -334,12 +396,12 @@ def update_audit(pid: int, body: AuditUpdate, db: Session = Depends(get_db)):
     db.commit()
 
     if body.audit_status is not None and body.audit_status.value != prev_status:
-        logger.bind(pid=pid, context={
+        logger.bind(pid=pid, actor=user.username, context={
             "previous_status": prev_status, "new_status": meta.audit_status.value,
         }).info("Underwriter changed audit status for PID {pid}: {prev} -> {new}",
                pid=pid, prev=prev_status, new=meta.audit_status.value)
     if body.underwriter_notes is not None and body.underwriter_notes != prev_notes:
-        logger.bind(pid=pid, context={"notes_length": len(body.underwriter_notes)}).info(
+        logger.bind(pid=pid, actor=user.username, context={"notes_length": len(body.underwriter_notes)}).info(
             "Underwriter updated audit notes for PID {pid}.", pid=pid)
 
     return {"pid": pid, "audit_status": meta.audit_status.value,
@@ -363,7 +425,7 @@ async def close_copilot_http_client():
 
 
 @app.post("/api/v1/copilot/chat/completions")
-async def copilot_chat_completions(request: Request):
+async def copilot_chat_completions(request: Request, user: User = Depends(get_current_user)):
     if not COPILOT_PROVIDER_API_KEY:
         raise HTTPException(503, "Copilot is not configured: set COPILOT_PROVIDER_API_KEY")
     try:
@@ -403,26 +465,32 @@ def log_row(r: SystemLog) -> dict:
     return {
         "id": r.id, "timestamp": r.timestamp.isoformat() if r.timestamp else None,
         "source": r.source, "level": r.level, "logger": r.logger_name,
-        "message": r.message, "pid": r.pid, "context": r.context,
+        "message": r.message, "pid": r.pid, "context": r.context, "actor": r.actor,
     }
 
 
 @app.get("/api/v1/logs")
 def list_logs(
     db: Session = Depends(get_db),
+    user: User = Depends(require_role(UserRole.UNDERWRITER, UserRole.ADMIN)),
     source: Optional[str] = Query(None, pattern="^(backend|frontend)$"),
     level: Optional[str] = None,
     pid: Optional[int] = None,
+    actor: Optional[str] = None,
     search: Optional[str] = None,
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
 ):
-    """Query the unified audit/operational log ledger."""
+    """Query the unified audit/operational log ledger. Restricted to Underwriter/Admin —
+    this is the compliance-sensitive record of everyone's actions, not just current-state
+    data. Flip to Depends(get_current_user) if Viewers should read it too."""
     q = db.query(SystemLog)
     if source:
         q = q.filter(SystemLog.source == source)
     if level:
         q = q.filter(SystemLog.level == level.upper())
+    if actor:
+        q = q.filter(SystemLog.actor == actor)
     if pid is not None:
         q = q.filter(SystemLog.pid == pid)
     if search:
@@ -439,14 +507,27 @@ VALID_LOG_LEVELS = {"TRACE", "DEBUG", "INFO", "SUCCESS", "WARNING", "ERROR", "CR
 LEVEL_ALIASES = {"TRACE": "DEBUG", "WARN": "WARNING"}
 
 
+CLIENT_LOG_BATCH_LIMIT = 50
+
+
 @app.post("/api/v1/logs/client", status_code=204)
-def log_client_event(entries: list[ClientLogEntry]):
-    """Ingest a batch of frontend (loglevel) log entries into the shared ledger."""
+def log_client_event(entries: list[ClientLogEntry], request: Request):
+    """Ingest a batch of frontend (loglevel) log entries into the shared ledger.
+
+    Deliberately left open (no login required) — this is the endpoint through which
+    the frontend reports its own errors, including pre-login and 401s themselves;
+    gating it risks a 401-reporting-a-401 loop. Since it's unauthenticated, batch size
+    is capped so it can't be used to flood system_logs with unbounded writes. `actor` is
+    attached opportunistically from the session when one exists, never required, and
+    never trusts a client-supplied value (ClientLogEntry has no actor field at all)."""
+    if len(entries) > CLIENT_LOG_BATCH_LIMIT:
+        raise HTTPException(400, f"Batch exceeds the {CLIENT_LOG_BATCH_LIMIT}-entry limit per request.")
+    actor = request.session.get("username")
     for e in entries:
         raw = e.level.upper()
         level = LEVEL_ALIASES.get(raw, raw)
         if level not in VALID_LOG_LEVELS:
             level = "INFO"
         logger.bind(source="frontend", pid=e.pid, context=e.context,
-                   logger_name=e.logger_name).log(
+                   logger_name=e.logger_name, actor=actor).log(
             level, "[frontend:{logger}] {message}", logger=e.logger_name, message=e.message)

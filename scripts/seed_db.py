@@ -17,14 +17,33 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "backend"))
 
+from app.auth import hash_password  # noqa: E402
 from app.db import Base, SessionLocal, engine  # noqa: E402
 from app.geo import property_latlng  # noqa: E402
 from app.models import (AuditStatus, BankPortfolioMeta, Property,  # noqa: E402
-                        PropertyImage)
+                        PropertyImage, User, UserRole)
 from app import inference  # noqa: E402
 from train_model import CATEGORICAL, FEATURES, NUMERIC, ORDINAL, load_frame  # noqa: E402
 
 FLAG_HI, FLAG_LO = 0.15, 0.08
+
+# PoC-only fixed demo credentials — not secrets. Do not reuse these anywhere,
+# and don't expose this app beyond a trusted local/demo network with defaults intact.
+DEMO_USERS = [
+    ("viewer", "viewer123", UserRole.VIEWER),
+    ("underwriter", "underwriter123", UserRole.UNDERWRITER),
+    ("admin", "admin123", UserRole.ADMIN),
+]
+
+
+def seed_users(session) -> None:
+    for username, password, role in DEMO_USERS:
+        session.add(User(username=username, password_hash=hash_password(password), role=role))
+    session.commit()
+    print("Seeded demo users (PoC-only, not secrets):")
+    for username, password, role in DEMO_USERS:
+        print(f"  {username:12s} / {password:16s} ({role.value})")
+
 
 # Deterministic mapping: structural category -> curated open-source Unsplash asset.
 UNSPLASH = {
@@ -70,6 +89,8 @@ def main() -> None:
     ratios = rng.uniform(0.60, 0.90, size=len(df))
 
     session = SessionLocal()
+    seed_users(session)  # committed on its own so login works even if property seeding fails partway
+
     for i, (_, row) in enumerate(df.iterrows()):
         sale = float(row["saleprice"])
         avm = float(avm_values[i])

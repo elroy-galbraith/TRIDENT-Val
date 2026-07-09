@@ -4,8 +4,11 @@ import PortfolioGrid from './views/PortfolioGrid.jsx'
 import Inspector from './views/Inspector.jsx'
 import MapView from './views/MapView.jsx'
 import ModelCard from './views/ModelCard.jsx'
+import Login from './views/Login.jsx'
+import { Spinner } from './components/shared.jsx'
 import { logger } from './logger.js'
 import { createCopilot } from './copilot.js'
+import { api, setUnauthorizedHandler } from './api.js'
 
 const TABS = [
   { id: 'dashboard', label: 'Risk Overview' },
@@ -37,6 +40,21 @@ export default function App() {
   const [{ view, pid, gridStatus }, setNavState] = useState(stateFromLocation)
   const [copilotOpen, setCopilotOpen] = useState(true)
   const copilotRef = useRef(null)
+  // undefined = checking for an existing session, null = logged out, object = logged in
+  const [user, setUser] = useState(undefined)
+
+  useEffect(() => {
+    setUnauthorizedHandler(() => setUser(null))
+    api.me().then(setUser).catch(() => setUser(null))
+  }, [])
+
+  const handleLogout = async () => {
+    logger.track('auth', `Logged out '${user.username}'.`)
+    try { await api.logout() } catch { /* session is being cleared client-side regardless */ }
+    // Flipping `user` to null re-runs the copilot-mount effect below, whose own
+    // cleanup disposes the widget — no need to touch copilotRef/copilotOpen here.
+    setUser(null)
+  }
 
   // Pushes a new browser history entry so the back/forward buttons move between
   // views instead of leaving every page stuck on the initial "/" entry.
@@ -75,9 +93,10 @@ export default function App() {
   }
 
   useEffect(() => {
+    if (!user) return
     openCopilot()
     return () => copilotRef.current?.dispose()
-  }, [])
+  }, [user])
 
   const openProperty = (id) => {
     logger.track('app', `Opened property inspector for PID ${id}.`, null, id)
@@ -100,33 +119,52 @@ export default function App() {
             <div className="font-semibold tracking-wide">TRIDENT-Val</div>
             <div className="text-[11px] text-white/60 tracking-wide">Residential Portfolio AVM &amp; Risk Triage Engine · PoC Sandbox</div>
           </div>
-          <nav className="flex gap-1 ml-auto">
-            {TABS.map((t) => (
-              <button key={t.id} onClick={() => openTab(t.id)}
-                className={`px-4 py-1.5 text-sm rounded-sm transition-colors ${
-                  view === t.id || (t.id === 'portfolio' && view === 'inspector')
-                    ? 'bg-white/15 text-white' : 'text-white/70 hover:text-white'}`}>
-                {t.label}
-              </button>
-            ))}
-          </nav>
-          {!copilotOpen && (
+          {user && (
+            <nav className="flex gap-1 ml-auto">
+              {TABS.map((t) => (
+                <button key={t.id} onClick={() => openTab(t.id)}
+                  className={`px-4 py-1.5 text-sm rounded-sm transition-colors ${
+                    view === t.id || (t.id === 'portfolio' && view === 'inspector')
+                      ? 'bg-white/15 text-white' : 'text-white/70 hover:text-white'}`}>
+                  {t.label}
+                </button>
+              ))}
+            </nav>
+          )}
+          {user && !copilotOpen && (
             <button onClick={openCopilot} aria-label="Reopen AI copilot"
               className="px-3 py-1.5 text-sm rounded-sm border border-white/20 text-white/80 hover:text-white hover:border-white/40 transition-colors">
               ✦ Copilot
             </button>
           )}
+          {user && (
+            <div className="flex items-center gap-3 text-sm text-white/70">
+              <span>{user.username} · {user.role}</span>
+              <button onClick={handleLogout}
+                className="text-white/70 hover:text-white underline underline-offset-2">
+                Log out
+              </button>
+            </div>
+          )}
         </div>
       </header>
 
       <main className="max-w-7xl mx-auto px-6 py-6">
-        {view === 'dashboard' && <Dashboard onTriage={openTriage} onOpen={openProperty} />}
-        {view === 'portfolio' && (
-          <PortfolioGrid key={gridStatus} onOpen={openProperty} initialStatus={gridStatus} />
+        {user === undefined && <Spinner label="Checking session…" />}
+        {user === null && <Login onLoggedIn={setUser} />}
+        {user && (
+          <>
+            {view === 'dashboard' && <Dashboard onTriage={openTriage} onOpen={openProperty} />}
+            {view === 'portfolio' && (
+              <PortfolioGrid key={gridStatus} onOpen={openProperty} initialStatus={gridStatus} />
+            )}
+            {view === 'map' && <MapView onOpen={openProperty} />}
+            {view === 'model-card' && <ModelCard onBrowse={() => openTab('portfolio')} />}
+            {view === 'inspector' && (
+              <Inspector pid={pid} user={user} onBack={() => navigate({ view: 'portfolio', pid: null })} onOpen={openProperty} />
+            )}
+          </>
         )}
-        {view === 'map' && <MapView onOpen={openProperty} />}
-        {view === 'model-card' && <ModelCard onBrowse={() => openTab('portfolio')} />}
-        {view === 'inspector' && <Inspector pid={pid} onBack={() => navigate({ view: 'portfolio', pid: null })} onOpen={openProperty} />}
       </main>
 
       <footer className="max-w-7xl mx-auto px-6 py-4 text-[11px] text-inkmute border-t border-line">

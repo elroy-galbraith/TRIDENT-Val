@@ -85,3 +85,25 @@ class SystemLog(Base):
     message = Column(Text, nullable=False)        # human-readable event description
     pid = Column(BigInteger, index=True, nullable=True)  # related property, if any
     context = Column(JSON)                         # structured payload (deltas, latency, etc.)
+    actor = Column(String(64), index=True, nullable=True)  # authenticated username; NULL if none
+
+
+class UserRole(str, enum.Enum):
+    VIEWER = "Viewer"
+    UNDERWRITER = "Underwriter"
+    ADMIN = "Admin"
+
+
+class User(Base):
+    """PoC-grade user store: a handful of demo accounts (see scripts/seed_db.py),
+    not a production identity system. Roles are re-checked from the DB on every
+    request (see app.auth.get_current_user) rather than trusted from the session,
+    so a role change takes effect on the user's very next request."""
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    username = Column(String(64), unique=True, nullable=False, index=True)
+    password_hash = Column(String(128), nullable=False)  # bcrypt hash
+    role = Column(Enum(UserRole, values_callable=lambda e: [m.value for m in e]),
+                  default=UserRole.VIEWER, nullable=False, index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())

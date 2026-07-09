@@ -36,7 +36,7 @@ function Contribution({ item, positive }) {
   )
 }
 
-export default function Inspector({ pid, onBack, onOpen }) {
+export default function Inspector({ pid, onBack, onOpen, user }) {
   const [prop, setProp] = useState(null)
   const [err, setErr] = useState(null)
   const [scenario, setScenario] = useState(null)
@@ -87,6 +87,7 @@ export default function Inspector({ pid, onBack, onOpen }) {
     } finally { setRunning(false) }
   }
   const resetScenario = () => { setScenario({ ...prop.features }); setResult(null) }
+  const canWriteAudit = user.role === 'Underwriter' || user.role === 'Admin'
   const saveAudit = async () => {
     const r = await api.updateAudit(pid, { audit_status: status, underwriter_notes: notes })
     logger.track('inspector', `Saved audit decision for PID ${pid}: ${r.audit_status}.`,
@@ -217,20 +218,23 @@ export default function Inspector({ pid, onBack, onOpen }) {
               <StatusBadge status={status} />
             </div>
             <select value={status} onChange={(e) => setStatus(e.target.value)}
-              aria-label="Audit status" data-page-agent-not-interactive
-              className="w-full border border-line rounded-sm px-2 py-1.5 text-sm bg-white">
+              aria-label="Audit status" data-page-agent-not-interactive disabled={!canWriteAudit}
+              className="w-full border border-line rounded-sm px-2 py-1.5 text-sm bg-white disabled:opacity-60 disabled:cursor-not-allowed">
               <option>Approved</option>
               <option>Pending Review</option>
               <option>Flagged: High Variance</option>
             </select>
             <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={4}
               placeholder="Underwriter notes — shared risk commentary ledger"
-              aria-label="Underwriter audit notes" data-page-agent-not-interactive
-              className="w-full border border-line rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-teal" />
-            <button onClick={saveAudit} data-page-agent-not-interactive
-              className="w-full bg-ink hover:bg-black text-white text-sm font-medium py-2 rounded-sm">
+              aria-label="Underwriter audit notes" data-page-agent-not-interactive disabled={!canWriteAudit}
+              className="w-full border border-line rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-teal disabled:opacity-60 disabled:cursor-not-allowed" />
+            <button onClick={saveAudit} data-page-agent-not-interactive disabled={!canWriteAudit}
+              className="w-full bg-ink hover:bg-black text-white text-sm font-medium py-2 rounded-sm disabled:opacity-50 disabled:cursor-not-allowed">
               {saved ? 'Saved ✓' : 'Save audit decision'}
             </button>
+            {!canWriteAudit && (
+              <div className="text-xs text-inkmute">Read-only — the {user.role} role cannot modify audit decisions.</div>
+            )}
           </div>
         </div>
 
