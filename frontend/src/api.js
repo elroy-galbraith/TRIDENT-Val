@@ -82,6 +82,11 @@ export const api = {
   revaluationFlagged: (runId, params) => get(`/revaluations/${runId}/flagged?${new URLSearchParams(params)}`),
   runRevaluation: (body) => send('POST', '/revaluations', body, 'revaluation cycle failed'),
   revaluationReportUrl: (runId) => `${BASE}/revaluations/${runId}/report`,
+  users: () => get('/users'),
+  assignments: (params) => get(`/assignments?${new URLSearchParams(params)}`),
+  createAssignment: (body) => send('POST', '/assignments', body, 'creating the assignment failed'),
+  updateAssignment: (id, body) => send('PATCH', `/assignments/${id}`, body, 'updating the assignment failed'),
+  assignmentsSummary: () => get('/assignments/summary'),
 }
 
 export const usd = (n, digits = 0) =>

@@ -6,13 +6,15 @@ import MapView from './views/MapView.jsx'
 import ModelCard from './views/ModelCard.jsx'
 import ModelCompare from './views/ModelCompare.jsx'
 import RevaluationCycles from './views/RevaluationCycles.jsx'
+import MyQueue from './views/MyQueue.jsx'
+import ManagerDashboard from './views/ManagerDashboard.jsx'
 import Login from './views/Login.jsx'
 import { Spinner } from './components/shared.jsx'
 import { logger } from './logger.js'
 import { createCopilot } from './copilot.js'
 import { api, setUnauthorizedHandler } from './api.js'
 
-const TABS = [
+const BASE_TABS = [
   { id: 'dashboard', label: 'Risk Overview' },
   { id: 'portfolio', label: 'Portfolio' },
   { id: 'map', label: 'Map' },
@@ -21,7 +23,18 @@ const TABS = [
   { id: 'compare', label: 'Compare' },
 ]
 
-const VIEW_IDS = new Set(['dashboard', 'portfolio', 'map', 'revaluations', 'model-card', 'compare'])
+// Assignable roles (Underwriter, Admin) get "My Queue"; only Admin (the manager role in this
+// PoC's RBAC) gets the manager rollup.
+function tabsForRole(role) {
+  const tabs = [...BASE_TABS]
+  if (role === 'Underwriter' || role === 'Admin') tabs.push({ id: 'my-queue', label: 'My Queue' })
+  if (role === 'Admin') tabs.push({ id: 'manager', label: 'Manager' })
+  return tabs
+}
+
+const VIEW_IDS = new Set([
+  'dashboard', 'portfolio', 'map', 'revaluations', 'model-card', 'compare', 'my-queue', 'manager',
+])
 
 function stateToPath({ view, pid, gridStatus }) {
   if (view === 'inspector' && pid != null) return `/inspector/${encodeURIComponent(pid)}`
@@ -125,7 +138,7 @@ export default function App() {
           </div>
           {user && (
             <nav className="flex gap-1 ml-auto">
-              {TABS.map((t) => (
+              {tabsForRole(user.role).map((t) => (
                 <button key={t.id} onClick={() => openTab(t.id)}
                   className={`px-4 py-1.5 text-sm rounded-sm transition-colors ${
                     view === t.id || (t.id === 'portfolio' && view === 'inspector')
@@ -171,6 +184,8 @@ export default function App() {
               <ModelCard user={user} onBrowse={() => openTab('portfolio')} onCompare={() => openTab('compare')} />
             )}
             {view === 'compare' && <ModelCompare user={user} onOpen={openProperty} />}
+            {view === 'my-queue' && <MyQueue user={user} onOpen={openProperty} />}
+            {view === 'manager' && <ManagerDashboard onOpen={openProperty} />}
             {view === 'inspector' && (
               <Inspector pid={pid} user={user} onBack={() => navigate({ view: 'portfolio', pid: null })} onOpen={openProperty} />
             )}
