@@ -3,7 +3,8 @@ import {
   Bar, BarChart, CartesianGrid, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts'
 import { api, pct, usd } from '../api.js'
-import { Spinner } from '../components/shared.jsx'
+import { ModelStatusBadge, Spinner } from '../components/shared.jsx'
+import { logger } from '../logger.js'
 import { setChartSummary } from '../copilot.js'
 
 // Inline "term" — click to reveal a one-sentence, non-technical definition. Keeps jargon
@@ -48,29 +49,114 @@ function Section({ title, subtitle, children }) {
   )
 }
 
-export default function ModelCard({ onBrowse }) {
-  const [spec, setSpec] = useState(null)
+const EXPLAINER_LABELS = {
+  tree_shap: 'exact TreeSHAP contributions',
+  linear_coef: "the model's own coefficients",
+}
+
+export default function ModelCard({ user, onBrowse, onCompare }) {
+  const [models, setModels] = useState(null)
   const [summary, setSummary] = useState(null)
-  const [importance, setImportance] = useState(null)
+  const [selectedId, setSelectedId] = useState(null)
+  const [detail, setDetail] = useState(null)
   const [err, setErr] = useState(null)
   const [selected, setSelected] = useState(null)
+  const [promoting, setPromoting] = useState(false)
+
+  const canPromote = user?.role === 'Admin'
+
+  const loadRegistry = () => {
+    Promise.all([api.models(), api.summary()])
+      .then(([m, sm]) => {
+        setModels(m.items)
+        setSummary(sm)
+        setSelectedId((prev) => prev ?? m.items.find((x) => x.status === 'Champion')?.id ?? m.items[0]?.id)
+      })
+      .catch((e) => setErr(e.message))
+  }
+
+  useEffect(loadRegistry, [])
 
   useEffect(() => {
+    if (!selectedId) return
     let active = true
-    Promise.all([api.spec(), api.summary(), api.importance()])
-      .then(([s, sm, imp]) => {
+    setDetail(null)
+    Promise.all([api.model(selectedId), api.modelSpec(selectedId), api.modelImportance(selectedId)])
+      .then(([model, spec, importance]) => {
         if (!active) return
-        setSpec(s); setSummary(sm); setImportance(imp)
-        setSelected(imp.drivers[0]?.feature ?? null)
-        setChartSummary('model_global_importance', imp.drivers)
+        setDetail({ model, spec, importance })
+        setSelected(importance.drivers[0]?.feature ?? null)
+        setChartSummary('model_global_importance', importance.drivers)
       })
       .catch((e) => { if (active) setErr(e.message) })
     return () => { active = false }
-  }, [])
+  }, [selectedId])
+
+  const promote = async () => {
+    const rationale = window.prompt(
+      `Promote "${detail.model.name}" to champion? This re-books the whole portfolio's ` +
+      `AVM value from this model. Enter a rationale for the audit ledger:`)
+    if (!rationale) return
+    setPromoting(true)
+    try {
+      const r = await api.promoteModel(selectedId, rationale)
+      logger.track('model_card', `Promoted model '${selectedId}' to champion.`,
+        { previous_champion: r.previous_champion, assets_rebooked: r.assets_rebooked })
+      loadRegistry()
+    } catch (e) {
+      window.alert(`Promotion failed: ${e.message}`)
+    } finally {
+      setPromoting(false)
+    }
+  }
 
   if (err) return <div className="py-16 text-center text-flag text-sm">Couldn't load the model card: {err}</div>
-  if (!spec || !summary || !importance) return <Spinner label="Loading model card…" />
+  if (!models || !summary) return <Spinner label="Loading model registry…" />
 
+  return (
+    <div className="space-y-4">
+      <div className="card p-6">
+        <div className="label">Model Risk Inventory</div>
+        <h1 className="text-2xl font-semibold mt-1">TRIDENT-Val Automated Valuation Models</h1>
+        <p className="text-sm text-inkmute mt-3 max-w-3xl leading-relaxed">
+          This page explains — in plain language, no data-science background required — how
+          each registered model behind this portfolio produces its property value estimates.
+          Exactly one model is the <span className="font-semibold text-tealdeep">champion</span>:
+          its valuation is what gets booked onto every asset. Every other model is a{' '}
+          <span className="font-semibold text-amber">challenger</span> — it scores the whole
+          portfolio in shadow, alongside the champion, so its accuracy can be compared before
+          anyone decides to trust it with real bookings.
+        </p>
+        <div className="flex gap-2 mt-4 flex-wrap">
+          {models.map((m) => (
+            <button key={m.id} onClick={() => setSelectedId(m.id)}
+              className={`flex items-center gap-2 px-3 py-2 rounded-sm border text-left transition-colors ${
+                selectedId === m.id ? 'border-teal bg-teal/5' : 'border-line hover:border-teal/50'}`}>
+              <ModelStatusBadge status={m.status} />
+              <span className="text-sm font-medium">{m.name}</span>
+              <span className="text-xs text-inkmute figure">v{m.version}</span>
+            </button>
+          ))}
+        </div>
+        {onCompare && (
+          <button onClick={onCompare}
+            className="mt-4 text-sm text-teal hover:underline">
+            Compare champion vs. challenger →
+          </button>
+        )}
+      </div>
+
+      {!detail ? <Spinner label="Loading model card…" /> : (
+        <ModelDetail detail={detail} summary={summary} selected={selected} setSelected={setSelected}
+          canPromote={canPromote && detail.model.status === 'Challenger'} onPromote={promote}
+          promoting={promoting} onBrowse={onBrowse} />
+      )}
+    </div>
+  )
+}
+
+function ModelDetail({ detail, summary, selected, setSelected, canPromote, onPromote, promoting, onBrowse }) {
+  const { model, spec, importance } = detail
   const topDrivers = importance.drivers.slice(0, 12).map((d) => ({ ...d, chartLabel: d.label }))
   const activeDriver = importance.drivers.find((d) => d.feature === selected) || importance.drivers[0]
   const nInputs = spec.features.length
@@ -78,43 +164,33 @@ export default function ModelCard({ onBrowse }) {
   const nOrdinal = Object.keys(spec.ordinal).length
 
   return (
-    <div className="space-y-4">
-      <div className="card p-6">
-        <div className="label">Model Card</div>
-        <h1 className="text-2xl font-semibold mt-1">TRIDENT-Val Automated Valuation Model</h1>
-        <p className="text-sm text-inkmute mt-3 max-w-3xl leading-relaxed">
-          This page explains — in plain language, no data-science background required — how the
-          AVM behind this portfolio produces its property value estimates: what it learned from,
-          how accurate it has measured out to be, which factors move its numbers the most, and
-          where its limits are. It's written for auditors and risk reviewers, not modelers.
-        </p>
-      </div>
+    <>
+      <Section title={`${model.status}: ${model.name}`} subtitle={model.architecture}>
+        <p className="text-sm leading-relaxed">{model.description}</p>
+        {canPromote && (
+          <button onClick={onPromote} disabled={promoting}
+            className="mt-4 bg-ink hover:bg-black text-white text-sm font-medium px-4 py-2 rounded-sm disabled:opacity-50">
+            {promoting ? 'Promoting…' : 'Promote to Champion'}
+          </button>
+        )}
+      </Section>
 
       <Section title="What Does It Do?">
         <p className="text-sm leading-relaxed">
-          The AVM estimates a home's market value from {nInputs} physical characteristics — size,
-          room counts, quality ratings, age, and neighborhood — without ever seeing a photo, a
-          listing description, or a human appraiser's opinion. Feed it the same inputs twice and
-          it returns the same number twice: every estimate is a reproducible calculation, not a
-          judgment call.
-        </p>
-        <p className="text-sm leading-relaxed mt-3">
-          Under the hood it's a{' '}
-          <Term define="Hundreds of small decision trees, built one after another. Each new tree focuses on correcting the errors the trees before it made, and the trees' outputs are added together for the final number.">
-            gradient-boosted tree ensemble
-          </Term>{' '}
-          (an algorithm called LightGBM) trained to predict{' '}
-          <span className="figure">{spec.target}</span>. It's a supervised model — it learned by
-          studying thousands of past home sales where the true price was already known, not by
-          reasoning from first principles about what a house "should" be worth.
+          This model estimates a home's market value from {nInputs} physical characteristics —
+          size, room counts, quality ratings, age, and neighborhood — without ever seeing a
+          photo, a listing description, or a human appraiser's opinion. Feed it the same inputs
+          twice and it returns the same number twice: every estimate is a reproducible
+          calculation, not a judgment call. It's a supervised model — it learned by studying
+          thousands of past home sales where the true price was already known.
         </p>
       </Section>
 
       <Section title="How Accurate Is It?">
         <div className="grid sm:grid-cols-3 gap-4 mb-4">
-          <Metric label="Median error (MAPE)" value={pct(spec.holdout_mape)}
+          <Metric label="Median error (MAPE)" value={pct(model.holdout_mape)}
             note="On a typical holdout home, the estimate lands within this percentage of the actual recorded sale price." />
-          <Metric label="Variance explained (R²)" value={spec.holdout_r2.toFixed(2)}
+          <Metric label="Variance explained (R²)" value={model.holdout_r2.toFixed(2)}
             note="Share of the price differences across holdout homes the model accounts for. 1.00 would be a perfect fit." />
           <Metric label="Live error band" value="±5%"
             note="Every estimate shown in this app ships with this band, e.g. a $300,000 estimate is reported as $285,000–$315,000." />
@@ -173,8 +249,8 @@ export default function ModelCard({ onBrowse }) {
         </div>
       </Section>
 
-      <Section title="What Drives the Model's Valuations?"
-        subtitle={`Average dollar impact per factor, computed across all ${importance.sample_size.toLocaleString()} properties in the portfolio using the same explainability engine (TreeSHAP) behind every individual property's Inspector page. Click a bar for a plain-English explanation.`}>
+      <Section title="What Drives This Model's Valuations?"
+        subtitle={`Average dollar impact per factor, computed across all ${importance.sample_size.toLocaleString()} properties in the portfolio using ${EXPLAINER_LABELS[model.explainer] || 'the model’s own explainability engine'} — the same machinery behind every individual property's Inspector page. Click a bar for a plain-English explanation.`}>
         <ResponsiveContainer width="100%" height={360}>
           <BarChart data={topDrivers} layout="vertical" margin={{ left: 8, right: 24 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="#DDE3E0" horizontal={false} />
@@ -250,6 +326,6 @@ export default function ModelCard({ onBrowse }) {
           </button>
         )}
       </div>
-    </div>
+    </>
   )
 }

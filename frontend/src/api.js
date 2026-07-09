@@ -53,15 +53,25 @@ export const api = {
   filters: () => get('/properties/filters'),
   properties: (params) => get(`/properties?${new URLSearchParams(params)}`),
   property: (pid) => get(`/properties/${pid}`),
+  propertyValuations: (pid) => get(`/properties/${pid}/valuations`),
   comps: (pid, limit = 6) => get(`/properties/${pid}/comps?limit=${limit}`),
-  spec: () => get('/model/spec'),
-  importance: () => get('/model/importance'),
-  valuate: (features) => send('POST', '/valuate', { features }, 'valuation failed'),
+  valuate: (features, model_id) =>
+    send('POST', '/valuate', model_id ? { features, model_id } : { features }, 'valuation failed'),
   updateAudit: (pid, body) => send('PATCH', `/properties/${pid}/audit`, body, 'audit update failed'),
+  triageDecision: (pid, body) =>
+    send('POST', `/properties/${pid}/triage-decision`, body, 'triage decision failed'),
   exportUrl: `${BASE}/properties/export`,
   login: (username, password) => send('POST', '/auth/login', { username, password }, 'login failed'),
   logout: () => send('POST', '/auth/logout', {}, 'logout failed'),
   me: () => get('/auth/me'),
+  models: () => get('/models'),
+  model: (id) => get(`/models/${id}`),
+  modelSpec: (id) => get(`/models/${id}/spec`),
+  modelImportance: (id) => get(`/models/${id}/importance`),
+  promoteModel: (id, rationale) =>
+    send('POST', `/models/${id}/promote`, { rationale }, 'promotion failed'),
+  compareModels: (params) => get(`/models/compare?${new URLSearchParams(params)}`),
+  disagreements: (params) => get(`/models/disagreements?${new URLSearchParams(params)}`),
 }
 
 export const usd = (n, digits = 0) =>

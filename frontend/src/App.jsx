@@ -4,6 +4,7 @@ import PortfolioGrid from './views/PortfolioGrid.jsx'
 import Inspector from './views/Inspector.jsx'
 import MapView from './views/MapView.jsx'
 import ModelCard from './views/ModelCard.jsx'
+import ModelCompare from './views/ModelCompare.jsx'
 import Login from './views/Login.jsx'
 import { Spinner } from './components/shared.jsx'
 import { logger } from './logger.js'
@@ -15,9 +16,10 @@ const TABS = [
   { id: 'portfolio', label: 'Portfolio' },
   { id: 'map', label: 'Map' },
   { id: 'model-card', label: 'Model Card' },
+  { id: 'compare', label: 'Compare' },
 ]
 
-const VIEW_IDS = new Set(['dashboard', 'portfolio', 'map', 'model-card'])
+const VIEW_IDS = new Set(['dashboard', 'portfolio', 'map', 'model-card', 'compare'])
 
 function stateToPath({ view, pid, gridStatus }) {
   if (view === 'inspector' && pid != null) return `/inspector/${encodeURIComponent(pid)}`
@@ -159,7 +161,10 @@ export default function App() {
               <PortfolioGrid key={gridStatus} onOpen={openProperty} initialStatus={gridStatus} />
             )}
             {view === 'map' && <MapView onOpen={openProperty} />}
-            {view === 'model-card' && <ModelCard onBrowse={() => openTab('portfolio')} />}
+            {view === 'model-card' && (
+              <ModelCard user={user} onBrowse={() => openTab('portfolio')} onCompare={() => openTab('compare')} />
+            )}
+            {view === 'compare' && <ModelCompare user={user} onOpen={openProperty} />}
             {view === 'inspector' && (
               <Inspector pid={pid} user={user} onBack={() => navigate({ view: 'portfolio', pid: null })} onOpen={openProperty} />
             )}

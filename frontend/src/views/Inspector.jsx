@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { api, pct, usd } from '../api.js'
-import { LtvChip, Spinner, StatusBadge } from '../components/shared.jsx'
+import { LtvChip, ModelStatusBadge, Spinner, StatusBadge } from '../components/shared.jsx'
 import PropertyMap from '../components/PropertyMap.jsx'
 import { logger } from '../logger.js'
 
@@ -46,15 +46,23 @@ export default function Inspector({ pid, onBack, onOpen, user }) {
   const [status, setStatus] = useState('')
   const [saved, setSaved] = useState(false)
   const [comps, setComps] = useState(null)
+  const [valuations, setValuations] = useState(null)
+  const [decisionRationale, setDecisionRationale] = useState('')
+  const [manualValue, setManualValue] = useState('')
+  const [decisionBusy, setDecisionBusy] = useState(false)
+  const [decisionSaved, setDecisionSaved] = useState(false)
+
+  const loadValuations = () => api.propertyValuations(pid).then(setValuations).catch(() => setValuations(null))
 
   useEffect(() => {
-    setProp(null); setResult(null)
+    setProp(null); setResult(null); setValuations(null); setDecisionRationale('')
     api.property(pid).then((p) => {
       setProp(p)
       setScenario({ ...p.features })
       setNotes(p.underwriter_notes || '')
       setStatus(p.audit_status)
     }).catch((e) => setErr(e.message))
+    loadValuations()
   }, [pid])
 
   useEffect(() => {
@@ -93,6 +101,35 @@ export default function Inspector({ pid, onBack, onOpen, user }) {
     logger.track('inspector', `Saved audit decision for PID ${pid}: ${r.audit_status}.`,
       { audit_status: r.audit_status, notes_length: notes.length }, pid)
     setStatus(r.audit_status); setSaved(true); setTimeout(() => setSaved(false), 2000)
+  }
+
+  const submitTriageDecision = async (decision, modelId) => {
+    if (!decisionRationale.trim()) { window.alert('A rationale is required for the audit ledger.'); return }
+    if (decision === 'manual') {
+      const val = +manualValue
+      if (!manualValue || isNaN(val) || val <= 0) {
+        window.alert('Enter a valid positive manual override value.')
+        return
+      }
+    }
+    setDecisionBusy(true)
+    try {
+      const body = { decision, rationale: decisionRationale }
+      if (decision === 'challenger') body.model_id = modelId
+      if (decision === 'manual') body.manual_value = +manualValue
+      const r = await api.triageDecision(pid, body)
+      logger.track('inspector', `Triage decision for PID ${pid}: ${decision} -> ${usd(r.avm_value)}.`,
+        { decision, resolved_model_id: r.resolved_model_id, avm_value: r.avm_value, rationale: decisionRationale }, pid)
+      setStatus(r.audit_status)
+      setDecisionRationale(''); setManualValue('')
+      setDecisionSaved(true); setTimeout(() => setDecisionSaved(false), 2000)
+      const [p] = await Promise.all([api.property(pid), loadValuations()])
+      setProp(p)
+    } catch (e) {
+      window.alert(`Decision failed: ${e.message}`)
+    } finally {
+      setDecisionBusy(false)
+    }
   }
 
   return (
@@ -204,13 +241,72 @@ export default function Inspector({ pid, onBack, onOpen, user }) {
           <div className="card p-5">
             <div className="label">Explainable AI — Value Drivers</div>
             <div className="text-xs text-inkmute mt-1 mb-2">
-              TreeSHAP contributions for the {result ? 'current scenario' : 'baseline'} estimate of{' '}
+              Contributions from model <span className="figure">{prop.resolved_model_id || active.model_id}</span> for
+              the {result ? 'current scenario' : 'baseline'} estimate of{' '}
               <span className="figure font-semibold text-ink">{usd(active.estimated_market_value)}</span> (±5%).
             </div>
             {active.top_drivers.map((d) => <Contribution key={d.feature} item={d} positive />)}
             <div className="h-2" />
             {active.top_detractors.map((d) => <Contribution key={d.feature} item={d} positive={false} />)}
           </div>
+
+          {valuations && valuations.items.length > 1 && (
+            <div className="card p-5 space-y-3">
+              <div className="label">Model Comparison &amp; Triage Decision</div>
+              <div className="space-y-2">
+                {valuations.items.map((v) => (
+                  <div key={v.model_id} className={`flex items-center justify-between rounded-sm border p-2.5 ${
+                    v.is_booked ? 'border-teal bg-teal/5' : 'border-line'}`}>
+                    <div className="flex items-center gap-2">
+                      <ModelStatusBadge status={v.status} />
+                      <span className="text-sm">{v.model_name}</span>
+                      {v.is_booked && <span className="text-[11px] text-teal font-semibold">BOOKED</span>}
+                    </div>
+                    <span className="figure text-sm font-semibold">{usd(v.estimated_value)}</span>
+                  </div>
+                ))}
+                {valuations.resolved_model_id == null && (
+                  <div className="flex items-center justify-between rounded-sm border border-amber bg-amber/5 p-2.5">
+                    <span className="text-sm">Manual override (no model)</span>
+                    <span className="figure text-sm font-semibold">{usd(valuations.booked_value)}</span>
+                  </div>
+                )}
+              </div>
+
+              {canWriteAudit ? (
+                <div className="space-y-2 pt-1 border-t border-line">
+                  <textarea value={decisionRationale} onChange={(e) => setDecisionRationale(e.target.value)}
+                    rows={2} placeholder="Rationale for this decision — logged to the audit ledger"
+                    aria-label="Triage decision rationale" data-page-agent-not-interactive
+                    className="w-full border border-line rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-teal" />
+                  <div className="flex flex-wrap gap-2">
+                    {valuations.items.map((v) => (
+                      <button key={v.model_id} disabled={decisionBusy || v.is_booked}
+                        data-page-agent-not-interactive
+                        onClick={() => submitTriageDecision(v.status === 'Champion' ? 'champion' : 'challenger', v.model_id)}
+                        className="px-3 py-1.5 text-sm border border-line rounded-sm bg-white hover:border-teal disabled:opacity-40 disabled:cursor-not-allowed">
+                        Book {v.status.toLowerCase()} ({usd(v.estimated_value)})
+                      </button>
+                    ))}
+                  </div>
+                  <div className="flex gap-2 items-center">
+                    <input type="number" value={manualValue} onChange={(e) => setManualValue(e.target.value)}
+                      placeholder="Manual value ($)" aria-label="Manual override value" data-page-agent-not-interactive
+                      className="flex-1 border border-line rounded-sm px-3 py-1.5 text-sm" />
+                    <button disabled={decisionBusy} onClick={() => submitTriageDecision('manual')}
+                      data-page-agent-not-interactive
+                      className="px-3 py-1.5 text-sm border border-line rounded-sm bg-white hover:border-teal disabled:opacity-40">
+                      {decisionSaved ? 'Saved ✓' : 'Book manual value'}
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="text-xs text-inkmute pt-1 border-t border-line">
+                  Read-only — the {user.role} role cannot resolve model disagreements.
+                </div>
+              )}
+            </div>
+          )}
 
           <div className="card p-5 space-y-3">
             <div className="label">Audit Lifecycle</div>

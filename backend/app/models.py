@@ -1,7 +1,8 @@
 import enum
 
 from sqlalchemy import (JSON, BigInteger, Column, DateTime, Enum, Float,
-                        ForeignKey, Integer, Numeric, String, Text)
+                        ForeignKey, Integer, Numeric, String, Text,
+                        UniqueConstraint)
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -12,6 +13,12 @@ class AuditStatus(str, enum.Enum):
     APPROVED = "Approved"
     PENDING_REVIEW = "Pending Review"
     FLAGGED_HIGH_VARIANCE = "Flagged: High Variance"
+
+
+class ModelStatus(str, enum.Enum):
+    CHAMPION = "Champion"      # exactly one at a time; the value that gets booked
+    CHALLENGER = "Challenger"  # scores the whole portfolio in shadow, never booked
+    RETIRED = "Retired"        # kept for history/audit, no longer scored at seed time
 
 
 class Property(Base):
@@ -51,8 +58,12 @@ class BankPortfolioMeta(Base):
     audit_status = Column(Enum(AuditStatus, values_callable=lambda e: [m.value for m in e]),
                           default=AuditStatus.PENDING_REVIEW, index=True)
     underwriter_notes = Column(Text, default="")
+    # Which registered model's valuation is currently booked as current_avm_value. Defaults to
+    # the champion at seed time; a triage decision can override it to a challenger or "manual".
+    resolved_model_id = Column(String(64), ForeignKey("models.id"), nullable=True)
 
     prop = relationship("Property", back_populates="meta")
+    resolved_model = relationship("RegisteredModel")
 
     @property
     def ltv(self) -> float:
@@ -107,3 +118,52 @@ class User(Base):
     role = Column(Enum(UserRole, values_callable=lambda e: [m.value for m in e]),
                   default=UserRole.VIEWER, nullable=False, index=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class RegisteredModel(Base):
+    """Model risk inventory entry — one row per trained artifact under model/<id>/.
+
+    Exactly one row should carry status=Champion at any time; that model's valuation is
+    what gets booked onto BankPortfolioMeta.current_avm_value. All other non-retired rows
+    are challengers: they score the full portfolio in shadow (see ModelValuation) but never
+    get booked directly — promoting one to champion is a deliberate, logged, portfolio-wide act.
+    """
+    __tablename__ = "models"
+
+    id = Column(String(64), primary_key=True)  # slug, e.g. "lgbm_v1", matches model/<id>/
+    name = Column(String(128), nullable=False)
+    version = Column(String(32), nullable=False)
+    architecture = Column(String(128), nullable=False)   # e.g. "LightGBM Gradient-Boosted Trees"
+    description = Column(Text, default="")                 # model-card summary, plain language
+    explainer = Column(String(32), nullable=False)         # "tree_shap" | "linear_coef"
+    status = Column(Enum(ModelStatus, values_callable=lambda e: [m.value for m in e]),
+                    default=ModelStatus.CHALLENGER, index=True)
+    holdout_mape = Column(Float)
+    holdout_r2 = Column(Float)
+    trained_at = Column(DateTime(timezone=True))
+    promoted_at = Column(DateTime(timezone=True), nullable=True)
+
+    valuations = relationship("ModelValuation", back_populates="model",
+                              cascade="all, delete-orphan")
+
+
+class ModelValuation(Base):
+    """Shadow-scoring ledger: one row per (property, model) — every registered model's
+    valuation for every asset, computed at seed/registration time. This is the source of
+    truth for champion/challenger comparison and the disagreement queue; it is never
+    overwritten in place, only recomputed wholesale when a model is (re)registered."""
+    __tablename__ = "model_valuations"
+    __table_args__ = (UniqueConstraint("pid", "model_id", name="uq_model_valuation_pid_model"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    pid = Column(BigInteger, ForeignKey("properties.pid"), index=True, nullable=False)
+    model_id = Column(String(64), ForeignKey("models.id"), index=True, nullable=False)
+    estimated_value = Column(Numeric(12, 2), nullable=False)
+    value_low = Column(Numeric(12, 2), nullable=False)
+    value_high = Column(Numeric(12, 2), nullable=False)
+    top_drivers = Column(JSON)
+    top_detractors = Column(JSON)
+    computed_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    prop = relationship("Property")
+    model = relationship("RegisteredModel", back_populates="valuations")
