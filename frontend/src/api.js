@@ -77,6 +77,11 @@ export const api = {
     const qs = params && Object.keys(params).length ? `?${new URLSearchParams(params)}` : ''
     return `${BASE}/portfolio/report${qs}`
   },
+  revaluations: () => get('/revaluations'),
+  revaluation: (runId) => get(`/revaluations/${runId}`),
+  revaluationFlagged: (runId, params) => get(`/revaluations/${runId}/flagged?${new URLSearchParams(params)}`),
+  runRevaluation: (body) => send('POST', '/revaluations', body, 'revaluation cycle failed'),
+  revaluationReportUrl: (runId) => `${BASE}/revaluations/${runId}/report`,
 }
 
 export const usd = (n, digits = 0) =>

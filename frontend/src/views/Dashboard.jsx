@@ -20,7 +20,7 @@ function Banner({ label, value, sub, accent }) {
   )
 }
 
-export default function Dashboard({ onTriage, onOpen }) {
+export default function Dashboard({ onTriage, onOpen, onRevaluations }) {
   const [data, setData] = useState(null)
   const [err, setErr] = useState(null)
 
@@ -40,7 +40,10 @@ export default function Dashboard({ onTriage, onOpen }) {
 
   return (
     <div className="space-y-6">
-      <div className="flex justify-end">
+      <div className="flex justify-end gap-4">
+        <button onClick={onRevaluations} className="text-sm text-teal hover:underline">
+          Run Revaluation Cycle →
+        </button>
         <a href={api.portfolioReportUrl()} target="_blank" rel="noopener noreferrer"
           onClick={() => logger.track('dashboard', 'Exported portfolio review summary.')}
           aria-label="Export portfolio review summary as PDF"

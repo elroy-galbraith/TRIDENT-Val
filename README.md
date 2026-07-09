@@ -282,6 +282,46 @@ versions render through a pure-Python backend.
   `export DYLD_FALLBACK_LIBRARY_PATH="$(brew --prefix)/lib"` in the same shell before starting
   uvicorn.
 
+## Revaluation Cycles (Collateral Monitoring)
+
+A one-time valuation is what a human valuer already delivers; the AVM's actual business case
+is revaluing the whole book on a recurring cadence at near-zero marginal cost — collateral
+monitoring, LTV drift, IFRS 9 provisioning inputs. The **Revaluation Cycles** tab turns the
+static snapshot into that operating loop: run a cycle → the LTV distribution shifts → the
+triage queue refills → underwriters work it via the same audit/triage endpoints described
+above → a cycle report exports.
+
+**Cycles, not a market simulator.** Each run (`revaluation_runs`, one row per cycle) applies a
+neighborhood-level market index adjustment to every asset's currently booked AVM value and
+refreshes LTV — this is deliberately not a time-series forecast, it's the same mechanism as
+HPI-indexed AVM updating between full model-backed revaluations in conventional practice. A
+champion promotion still re-anchors every value to raw model output; a cycle indexes on top of
+whatever is currently booked. Four scenario types (`POST /api/v1/revaluations`):
+
+- **Standard Quarterly Cycle** (`organic`) — small (±4%), deterministic per-neighborhood drift,
+  not a forecast — just enough movement to shift LTV buckets and occasionally trip a flag
+  between deliberate stress runs, the way a routine quarterly index update would.
+- **Broad Market Stress** (`broad_stress`) — one uniform shock applied to every neighborhood.
+- **Concentrated Neighborhood Shock** (`targeted_stress`) — an isolated shock to a single named
+  neighborhood, for a concentration-risk story ("what if our largest neighborhood corrects
+  15%?").
+- **Custom** (`custom`) — a full operator-specified `{neighborhood: pct}` map.
+
+**Triage gets a second signal.** Per-asset outcomes (`revaluation_results`) flag an asset where
+its value dropped more than 10% since the prior booked value, or its LTV is at/above 80% after
+the cycle — a period-over-period movement signal, distinct from (and additive to) the existing
+variance-vs-original-sale-price triage. A flag from a cycle escalates `audit_status` to
+`Flagged: High Variance` regardless of that asset's variance against the original sale price,
+so a stress scenario visibly refills the queue even for assets that were otherwise Approved.
+Gated the same as a triage decision (Underwriter/Admin) — this is routine collateral
+monitoring, not the portfolio-wide model risk decision that gates model promotion.
+
+**Cycle Report** (`GET /api/v1/revaluations/{run_id}/report`): the scenario and index
+adjustments applied, the before/after LTV distribution, largest movers, and the triage queue
+this cycle refilled, with an AI-drafted executive summary — same IVS 103 / Red Book framing,
+`.disclosure-box`, and LLM-narrates-never-computes guarantee as the asset/portfolio reports
+above (see [Report Export](#report-export-ivs-103--rics-red-book-vps-6)).
+
 ## Architecture
 
 ```
@@ -294,7 +334,8 @@ model/
   linear_v1/               Challenger artifact + manifest
 backend/app/
   models.py                properties / bank_portfolio_meta / property_images / system_logs /
-                           users / models (registry) / model_valuations (shadow-scoring ledger)
+                           users / models (registry) / model_valuations (shadow-scoring ledger) /
+                           revaluation_runs / revaluation_results (collateral monitoring cycles)
   auth.py                  bcrypt hashing + session-cookie get_current_user / require_role deps
   inference.py             Model-ID-keyed scoring; tree_shap (native TreeSHAP) and
                            linear_coef (exact coefficient attribution) explainers
@@ -303,7 +344,8 @@ backend/app/
                            grounded-only prompting; see Report Export above)
   reports.py               Report data assembly (IVS 103 / Red Book VPS 6 context) + Jinja2 ->
                            WeasyPrint PDF rendering
-  templates/               report.css + asset_report.html + portfolio_report.html
+  templates/               report.css + asset_report.html + portfolio_report.html +
+                           revaluation_report.html
   main.py                  REST API (see below)
 frontend/src/
   logger.js                loglevel wrapper: human-readable console + remote shipping
@@ -316,11 +358,14 @@ frontend/src/
     Inspector.jsx          View 3 — glass-box matrix, SHAP/coefficient widget, what-if
                            scenario panel, delta meter, audit lifecycle box, model
                            comparison & triage decision panel (role-gated)
-    ModelCard.jsx          View 4 — model risk inventory + plain-language model card per
+    RevaluationCycles.jsx  View 4 — collateral monitoring: run a cycle (standard/broad
+                           stress/targeted stress/custom), cycle history, before/after LTV
+                           shift, largest movers, triage queue refilled, cycle report export
+    ModelCard.jsx          View 5 — model risk inventory + plain-language model card per
                            registered model: what it does, holdout accuracy, training data
                            provenance, interactive global feature-importance chart,
                            limitations & appropriate use, promote-to-champion (Admin)
-    ModelCompare.jsx       View 5 — champion vs. challenger agreement scatter,
+    ModelCompare.jsx       View 6 — champion vs. challenger agreement scatter,
                            per-neighborhood error/bias breakdown, disagreement queue,
                            promote-to-champion (Admin)
 ```
@@ -345,6 +390,11 @@ All endpoints below require a logged-in session unless noted; ⚑ marks Underwri
 | GET | `/api/v1/properties/export` | Structural CSV download |
 | GET | `/api/v1/properties/{pid}/report` | Underwriter Decision Report (PDF) — see Report Export |
 | GET | `/api/v1/portfolio/report` | Portfolio Review Summary (PDF) — see Report Export |
+| POST | `/api/v1/revaluations` | ⚑ Run a revaluation cycle (organic/broad_stress/targeted_stress/custom) — see Revaluation Cycles |
+| GET | `/api/v1/revaluations` | Cycle history with per-run summary stats |
+| GET | `/api/v1/revaluations/{run_id}` | One cycle's index adjustments, before/after LTV distribution, largest movers |
+| GET | `/api/v1/revaluations/{run_id}/flagged` | Paginated triage queue this cycle flagged |
+| GET | `/api/v1/revaluations/{run_id}/report` | Revaluation Cycle Report (PDF) — see Report Export |
 | GET | `/api/v1/models` | The model risk inventory: every registered model + governance status |
 | GET | `/api/v1/models/{model_id}` \| `/spec` \| `/importance` | Per-model card, feature spec, portfolio-wide feature importance (cached) |
 | POST | `/api/v1/models/{model_id}/promote` | ⚑⚑ Admin-only: designate a new champion, re-book the whole portfolio |

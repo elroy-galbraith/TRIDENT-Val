@@ -1,6 +1,6 @@
 import enum
 
-from sqlalchemy import (JSON, BigInteger, Column, DateTime, Enum, Float,
+from sqlalchemy import (JSON, BigInteger, Boolean, Column, DateTime, Enum, Float,
                         ForeignKey, Integer, Numeric, String, Text,
                         UniqueConstraint)
 from sqlalchemy.orm import relationship
@@ -148,6 +148,64 @@ class RegisteredModel(Base):
 
     valuations = relationship("ModelValuation", back_populates="model",
                               cascade="all, delete-orphan")
+
+
+class ScenarioType(str, enum.Enum):
+    ORGANIC = "organic"                  # small seeded per-neighborhood drift ("standard cycle")
+    BROAD_STRESS = "broad_stress"        # uniform shock applied across every neighborhood
+    TARGETED_STRESS = "targeted_stress"  # shock isolated to one neighborhood (concentration risk)
+    CUSTOM = "custom"                    # admin-specified per-neighborhood adjustments
+
+
+class RevaluationRun(Base):
+    """One periodic revaluation cycle: market movement since the previous cycle, injected as
+    neighborhood-level index adjustments and applied to every asset's currently booked AVM
+    value — the collateral-monitoring loop between full model-backed revaluations (a
+    champion promotion re-anchors to raw model output; a cycle indexes on top of it). This is
+    deliberately not a market/time-series simulator: it's discrete runs with an operator-set
+    or auto-generated index vector per run, matching how HPI-indexed AVM updating works
+    between full revaluations in practice.
+    """
+    __tablename__ = "revaluation_runs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    as_of_date = Column(DateTime(timezone=True), nullable=False)
+    scenario_name = Column(String(128), nullable=False)
+    scenario_type = Column(Enum(ScenarioType, values_callable=lambda e: [m.value for m in e]),
+                           nullable=False)
+    index_adjustments = Column(JSON, nullable=False)  # {neighborhood: pct_applied_this_run}
+    notes = Column(Text, default="")
+    model_id = Column(String(64), ForeignKey("models.id"), nullable=True)  # champion at run time
+    created_by = Column(String(64), nullable=True)  # actor username
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    results = relationship("RevaluationResult", back_populates="run",
+                           cascade="all, delete-orphan")
+
+
+class RevaluationResult(Base):
+    """Per-asset outcome of one revaluation run: prior vs. new booked value/LTV and whether the
+    period-over-period movement itself is a triage signal (distinct from — and additive to —
+    the existing AVM-vs-original-sale variance triage), so a stress cycle visibly refills the
+    triage queue even for assets whose variance against the original sale price was fine."""
+    __tablename__ = "revaluation_results"
+    __table_args__ = (UniqueConstraint("run_id", "pid", name="uq_revaluation_result_run_pid"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    run_id = Column(Integer, ForeignKey("revaluation_runs.id"), index=True, nullable=False)
+    pid = Column(BigInteger, ForeignKey("properties.pid"), index=True, nullable=False)
+    prior_value = Column(Numeric(12, 2), nullable=False)
+    new_value = Column(Numeric(12, 2), nullable=False)
+    value_delta_pct = Column(Float, nullable=False)
+    prior_ltv = Column(Float, nullable=False)
+    new_ltv = Column(Float, nullable=False)
+    ltv_delta = Column(Float, nullable=False)
+    flagged = Column(Boolean, default=False, index=True)
+    flag_reasons = Column(JSON)  # list[str], e.g. ["value_drop_gt_10pct", "ltv_crossed_80"]
+    audit_status_after = Column(Enum(AuditStatus, values_callable=lambda e: [m.value for m in e]))
+
+    run = relationship("RevaluationRun", back_populates="results")
+    prop = relationship("Property")
 
 
 class ModelValuation(Base):

@@ -5,6 +5,7 @@ import Inspector from './views/Inspector.jsx'
 import MapView from './views/MapView.jsx'
 import ModelCard from './views/ModelCard.jsx'
 import ModelCompare from './views/ModelCompare.jsx'
+import RevaluationCycles from './views/RevaluationCycles.jsx'
 import Login from './views/Login.jsx'
 import { Spinner } from './components/shared.jsx'
 import { logger } from './logger.js'
@@ -15,11 +16,12 @@ const TABS = [
   { id: 'dashboard', label: 'Risk Overview' },
   { id: 'portfolio', label: 'Portfolio' },
   { id: 'map', label: 'Map' },
+  { id: 'revaluations', label: 'Revaluation Cycles' },
   { id: 'model-card', label: 'Model Card' },
   { id: 'compare', label: 'Compare' },
 ]
 
-const VIEW_IDS = new Set(['dashboard', 'portfolio', 'map', 'model-card', 'compare'])
+const VIEW_IDS = new Set(['dashboard', 'portfolio', 'map', 'revaluations', 'model-card', 'compare'])
 
 function stateToPath({ view, pid, gridStatus }) {
   if (view === 'inspector' && pid != null) return `/inspector/${encodeURIComponent(pid)}`
@@ -156,11 +158,15 @@ export default function App() {
         {user === null && <Login onLoggedIn={setUser} />}
         {user && (
           <>
-            {view === 'dashboard' && <Dashboard onTriage={openTriage} onOpen={openProperty} />}
+            {view === 'dashboard' && (
+              <Dashboard onTriage={openTriage} onOpen={openProperty}
+                onRevaluations={() => openTab('revaluations')} />
+            )}
             {view === 'portfolio' && (
               <PortfolioGrid key={gridStatus} onOpen={openProperty} initialStatus={gridStatus} />
             )}
             {view === 'map' && <MapView onOpen={openProperty} />}
+            {view === 'revaluations' && <RevaluationCycles user={user} onOpen={openProperty} />}
             {view === 'model-card' && (
               <ModelCard user={user} onBrowse={() => openTab('portfolio')} onCompare={() => openTab('compare')} />
             )}
