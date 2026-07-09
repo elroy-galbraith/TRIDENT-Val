@@ -18,8 +18,11 @@ const LEVEL_STYLE = {
 let queue = []
 let flushTimer = null
 
-function flush() {
-  flushTimer = null
+// `keepalive` is only safe for the beforeunload flush: browsers cap total
+// concurrent keepalive payload size (~64KB), so using it on every periodic
+// flush risks a TypeError if a batch is large.
+function flush(isUnloading = false) {
+  if (flushTimer) { clearTimeout(flushTimer); flushTimer = null }
   if (!queue.length) return
   const batch = queue
   queue = []
@@ -27,17 +30,25 @@ function flush() {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(batch),
-    keepalive: true,
+    ...(isUnloading ? { keepalive: true } : {}),
   }).catch(() => {})
 }
 
 function ship(entry) {
   queue.push(entry)
-  if (!flushTimer) flushTimer = setTimeout(flush, 1500)
+  if (!flushTimer) flushTimer = setTimeout(() => flush(false), 1500)
 }
 
 if (typeof window !== 'undefined') {
-  window.addEventListener('beforeunload', flush)
+  window.addEventListener('beforeunload', () => flush(true))
+}
+
+function serialize(arg) {
+  if (arg instanceof Error) return arg.stack || arg.message
+  if (typeof arg === 'object' && arg !== null) {
+    try { return JSON.stringify(arg) } catch { return String(arg) }
+  }
+  return String(arg)
 }
 
 const originalFactory = log.methodFactory
@@ -48,7 +59,7 @@ log.methodFactory = (methodName, logLevel, loggerName) => {
     const ts = new Date().toTimeString().slice(0, 8)
     raw(`%c${ts} ${levelName.padEnd(5)} [${scope}]`, LEVEL_STYLE[levelName] || '', ...args)
     if (REMOTE_LEVELS.has(levelName)) {
-      ship({ level: levelName, logger: scope, message: args.map(String).join(' ') })
+      ship({ level: levelName, logger: scope, message: args.map(serialize).join(' ') })
     }
   }
 }

@@ -17,7 +17,6 @@ from .logging_config import setup_logging
 from .models import AuditStatus, BankPortfolioMeta, Property, SystemLog
 
 setup_logging()
-Base.metadata.create_all(bind=engine)  # idempotent: only creates system_logs on existing DBs
 
 app = FastAPI(title="TRIDENT-Val AVM & Risk Triage Engine", version="1.0-poc")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -25,13 +24,23 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 
 @app.on_event("startup")
 def log_startup():
+    Base.metadata.create_all(bind=engine)  # idempotent: only creates system_logs on existing DBs
     logger.info("TRIDENT-Val backend starting up (version {v})", v=app.version)
 
 
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
     start = time.perf_counter()
-    response = await call_next(request)
+    try:
+        response = await call_next(request)
+    except Exception as e:
+        duration_ms = round((time.perf_counter() - start) * 1000, 1)
+        logger.bind(context={
+            "method": request.method, "path": request.url.path,
+            "status_code": 500, "duration_ms": duration_ms, "error": str(e),
+        }).error("{method} {path} -> 500 ({duration}ms) - unhandled exception: {error}",
+                method=request.method, path=request.url.path, duration=duration_ms, error=str(e))
+        raise
     duration_ms = round((time.perf_counter() - start) * 1000, 1)
     level = "ERROR" if response.status_code >= 500 else \
             "WARNING" if response.status_code >= 400 else "INFO"
@@ -359,12 +368,18 @@ def list_logs(
             "items": [log_row(r) for r in rows]}
 
 
+VALID_LOG_LEVELS = {"TRACE", "DEBUG", "INFO", "SUCCESS", "WARNING", "ERROR", "CRITICAL"}
+LEVEL_ALIASES = {"TRACE": "DEBUG", "WARN": "WARNING"}
+
+
 @app.post("/api/v1/logs/client", status_code=204)
 def log_client_event(entries: list[ClientLogEntry]):
     """Ingest a batch of frontend (loglevel) log entries into the shared ledger."""
-    level_map = {"TRACE": "DEBUG", "WARN": "WARNING"}
     for e in entries:
-        level = level_map.get(e.level.upper(), e.level.upper())
+        raw = e.level.upper()
+        level = LEVEL_ALIASES.get(raw, raw)
+        if level not in VALID_LOG_LEVELS:
+            level = "INFO"
         logger.bind(source="frontend", pid=e.pid, context=e.context,
                    logger_name=e.logger_name).log(
             level, "[frontend:{logger}] {message}", logger=e.logger_name, message=e.message)
