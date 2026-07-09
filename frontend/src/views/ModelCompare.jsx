@@ -65,6 +65,10 @@ export default function ModelCompare({ user, onOpen }) {
 
   const promote = async () => {
     const target = models.find((m) => m.id === challengerId)
+    if (!target) {
+      window.alert('No challenger model is currently selected or available for promotion.')
+      return
+    }
     const rationale = window.prompt(
       `Promote "${target.name}" to champion? This re-books the whole portfolio's AVM value ` +
       `from this model. Enter a rationale for the audit ledger:`)
@@ -116,7 +120,7 @@ export default function ModelCompare({ user, onOpen }) {
               <span className="font-medium">{compare.challenger.name}</span>
             </div>
             {user?.role === 'Admin' && (
-              <button onClick={promote} disabled={promoting}
+              <button onClick={promote} disabled={promoting || !challengerId}
                 className="ml-auto bg-ink hover:bg-black text-white text-sm font-medium px-4 py-2 rounded-sm disabled:opacity-50">
                 {promoting ? 'Promoting…' : 'Promote challenger to champion'}
               </button>

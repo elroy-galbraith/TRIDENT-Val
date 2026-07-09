@@ -105,7 +105,13 @@ export default function Inspector({ pid, onBack, onOpen, user }) {
 
   const submitTriageDecision = async (decision, modelId) => {
     if (!decisionRationale.trim()) { window.alert('A rationale is required for the audit ledger.'); return }
-    if (decision === 'manual' && !manualValue) { window.alert('Enter a manual override value.'); return }
+    if (decision === 'manual') {
+      const val = +manualValue
+      if (!manualValue || isNaN(val) || val <= 0) {
+        window.alert('Enter a valid positive manual override value.')
+        return
+      }
+    }
     setDecisionBusy(true)
     try {
       const body = { decision, rationale: decisionRationale }

@@ -87,7 +87,14 @@ class UnknownModelError(KeyError):
 
 
 def _model_path(model_id: str) -> Path:
-    d = MODEL_DIR / model_id
+    # model_id is attacker-controlled (a URL path parameter) — resolve and confirm the
+    # result is still inside MODEL_DIR before touching the filesystem. Without this, a
+    # value like "../../etc" or an absolute path resets the join entirely (a well-known
+    # pathlib gotcha: Path("/a") / "/etc" == Path("/etc")) and escapes MODEL_DIR.
+    d = (MODEL_DIR / model_id).resolve()
+    model_root = MODEL_DIR.resolve()
+    if d != model_root and model_root not in d.parents:
+        raise UnknownModelError(f"No registered model artifact at model/{model_id}/")
     if not (d / "manifest.json").exists():
         raise UnknownModelError(f"No registered model artifact at model/{model_id}/")
     return d

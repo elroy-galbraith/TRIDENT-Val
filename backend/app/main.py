@@ -14,7 +14,7 @@ from fastapi.responses import Response, StreamingResponse
 from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import String, cast, func, or_
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, aliased, joinedload
 from starlette.middleware.sessions import SessionMiddleware
 
 load_dotenv()  # picks up a repo-root .env for local (non-Docker) runs; no-op if absent
@@ -303,9 +303,9 @@ def promote_model(model_id: str, body: PromoteRequest, db: Session = Depends(get
                                   (ModelValuation.model_id == model_id))
             .all())
     for meta, sale_price, val in rows:
-        sale = float(sale_price)
+        sale = float(sale_price) if sale_price else 0.0
         avm = float(val.estimated_value)
-        variance = (avm - sale) / sale
+        variance = (avm - sale) / sale if sale else 0.0
         meta.current_avm_value = val.estimated_value
         meta.avm_variance_pct = round(variance, 4)
         meta.resolved_model_id = model_id
@@ -333,19 +333,20 @@ def compare_models(champion: Optional[str] = None, challenger: Optional[str] = N
     champ = resolve_champion(db, champion)
     chal = resolve_challenger(db, challenger)
 
-    props = db.query(Property.pid, Property.neighborhood, Property.bldg_type,
-                     Property.sale_price).all()
-    champ_vals = {v.pid: float(v.estimated_value) for v in
-                  db.query(ModelValuation).filter(ModelValuation.model_id == champ.id)}
-    chal_vals = {v.pid: float(v.estimated_value) for v in
-                 db.query(ModelValuation).filter(ModelValuation.model_id == chal.id)}
+    # Single joined query instead of one full-table scan per model — inner joins on both
+    # valuations naturally drop any property missing either model's score, matching the
+    # previous "skip if either value is None" behavior.
+    mv_champ, mv_chal = aliased(ModelValuation), aliased(ModelValuation)
+    rows = (db.query(Property.pid, Property.neighborhood, Property.bldg_type,
+                     Property.sale_price, mv_champ.estimated_value, mv_chal.estimated_value)
+            .join(mv_champ, (mv_champ.pid == Property.pid) & (mv_champ.model_id == champ.id))
+            .join(mv_chal, (mv_chal.pid == Property.pid) & (mv_chal.model_id == chal.id))
+            .all())
 
     points, divergences, champ_err, chal_err = [], [], [], []
     seg: dict[str, dict] = {}
-    for pid, nbhd, bldg, sale_price in props:
-        va, vb = champ_vals.get(pid), chal_vals.get(pid)
-        if va is None or vb is None:
-            continue
+    for pid, nbhd, bldg, sale_price, va_dec, vb_dec in rows:
+        va, vb = float(va_dec), float(vb_dec)
         sale = float(sale_price)
         divergence_pct = (vb - va) / va if va else 0.0
         points.append({
@@ -402,18 +403,17 @@ def model_disagreements(
     champ = resolve_champion(db, champion)
     chal = resolve_challenger(db, challenger)
 
-    champ_vals = {v.pid: float(v.estimated_value) for v in
-                  db.query(ModelValuation).filter(ModelValuation.model_id == champ.id)}
-    chal_vals = {v.pid: float(v.estimated_value) for v in
-                 db.query(ModelValuation).filter(ModelValuation.model_id == chal.id)}
-
-    rows = db.query(Property).join(BankPortfolioMeta).options(
-        joinedload(Property.meta), joinedload(Property.image)).all()
+    # Single joined query instead of one full-table scan per model (see compare_models).
+    mv_champ, mv_chal = aliased(ModelValuation), aliased(ModelValuation)
+    rows = (db.query(Property, mv_champ.estimated_value, mv_chal.estimated_value)
+            .join(BankPortfolioMeta)
+            .join(mv_champ, (mv_champ.pid == Property.pid) & (mv_champ.model_id == champ.id))
+            .join(mv_chal, (mv_chal.pid == Property.pid) & (mv_chal.model_id == chal.id))
+            .options(joinedload(Property.meta), joinedload(Property.image))
+            .all())
     items = []
-    for p in rows:
-        va, vb = champ_vals.get(p.pid), chal_vals.get(p.pid)
-        if va is None or vb is None:
-            continue
+    for p, va_dec, vb_dec in rows:
+        va, vb = float(va_dec), float(vb_dec)
         divergence = (vb - va) / va if va else 0.0
         if abs(divergence) < threshold:
             continue
@@ -684,7 +684,7 @@ def triage_decision(pid: int, body: TriageDecisionRequest, db: Session = Depends
     if not prop:
         raise HTTPException(404, "Property not found")
     meta = prop.meta
-    sale = float(prop.sale_price)
+    sale = float(prop.sale_price) if prop.sale_price else 0.0
     prev_value, prev_model = float(meta.current_avm_value), meta.resolved_model_id
 
     if body.decision == "manual":
@@ -704,7 +704,7 @@ def triage_decision(pid: int, body: TriageDecisionRequest, db: Session = Depends
             raise HTTPException(404, f"No valuation on file for model_id {model_id!r} on this property")
         new_value, new_model_id = float(val.estimated_value), model_id
 
-    variance = (new_value - sale) / sale
+    variance = (new_value - sale) / sale if sale else 0.0
     meta.current_avm_value = round(new_value, 2)
     meta.avm_variance_pct = round(variance, 4)
     meta.resolved_model_id = new_model_id
