@@ -1,0 +1,240 @@
+import React, { useEffect, useMemo, useState } from 'react'
+import { api, pct, usd } from '../api.js'
+import { LtvChip, Spinner, StatusBadge } from '../components/shared.jsx'
+
+const QUAL_OPTS = [
+  { v: 5, label: 'Excellent' }, { v: 4, label: 'Good' }, { v: 3, label: 'Typical/Average' },
+  { v: 2, label: 'Fair' }, { v: 1, label: 'Poor' },
+]
+const FUNC_OPTS = [
+  { v: 8, label: 'Typical' }, { v: 7, label: 'Minor Deductions 1' }, { v: 6, label: 'Minor Deductions 2' },
+  { v: 5, label: 'Moderate' }, { v: 4, label: 'Major Deductions 1' }, { v: 3, label: 'Major Deductions 2' },
+  { v: 2, label: 'Severely Damaged' }, { v: 1, label: 'Salvage Only' },
+]
+
+const SECTIONS = {
+  Structure: ['gr_liv_area', 'total_bsmt_sf', 'first_flr_sf', 'garage_area', 'garage_cars',
+    'lot_area', 'full_bath', 'half_bath', 'bedroom_abvgr', 'totrms_abvgrd', 'fireplaces', 'mas_vnr_area'],
+  Quality: ['overall_qual', 'overall_cond', 'kitchen_qual', 'exter_qual', 'bsmt_qual', 'heating_qc', 'functional'],
+  'External Factors': ['neighborhood', 'ms_zoning', 'bldg_type', 'house_style', 'central_air',
+    'year_built', 'year_remod_add'],
+}
+
+function Contribution({ item, positive }) {
+  return (
+    <div className="flex items-center justify-between py-1.5 border-b border-line last:border-0">
+      <div>
+        <div className="text-sm">{item.label}</div>
+        <div className="text-xs text-inkmute figure">{String(item.value)}</div>
+      </div>
+      <div className={`figure text-sm font-semibold ${positive ? 'text-ok' : 'text-flag'}`}>
+        {positive ? '+' : '−'}{usd(Math.abs(item.impact_usd))}
+      </div>
+    </div>
+  )
+}
+
+export default function Inspector({ pid, onBack }) {
+  const [prop, setProp] = useState(null)
+  const [err, setErr] = useState(null)
+  const [scenario, setScenario] = useState(null)
+  const [result, setResult] = useState(null)       // latest what-if valuation
+  const [running, setRunning] = useState(false)
+  const [notes, setNotes] = useState('')
+  const [status, setStatus] = useState('')
+  const [saved, setSaved] = useState(false)
+
+  useEffect(() => {
+    setProp(null); setResult(null)
+    api.property(pid).then((p) => {
+      setProp(p)
+      setScenario({ ...p.features })
+      setNotes(p.underwriter_notes || '')
+      setStatus(p.audit_status)
+    }).catch((e) => setErr(e.message))
+  }, [pid])
+
+  const baseline = prop?.baseline_valuation
+  const active = result || baseline
+  const delta = useMemo(() => {
+    if (!result || !baseline) return null
+    const d = result.estimated_market_value - baseline.estimated_market_value
+    return { usd: d, pct: d / baseline.estimated_market_value }
+  }, [result, baseline])
+
+  if (err) return <div className="py-16 text-center text-flag text-sm">{err}</div>
+  if (!prop || !scenario) return <Spinner label="Loading asset file…" />
+
+  const setF = (k, v) => setScenario((s) => ({ ...s, [k]: v }))
+  const recalc = async () => {
+    setRunning(true)
+    try { setResult(await api.valuate(scenario)) } finally { setRunning(false) }
+  }
+  const resetScenario = () => { setScenario({ ...prop.features }); setResult(null) }
+  const saveAudit = async () => {
+    const r = await api.updateAudit(pid, { audit_status: status, underwriter_notes: notes })
+    setStatus(r.audit_status); setSaved(true); setTimeout(() => setSaved(false), 2000)
+  }
+
+  return (
+    <div className="space-y-4">
+      <button onClick={onBack} className="text-sm text-teal hover:underline">← Back to portfolio</button>
+
+      {/* Header strip */}
+      <div className="card p-5 flex flex-wrap gap-6 items-center">
+        <img src={prop.image_url} alt="" className="w-28 h-20 object-cover rounded-sm border border-line"
+          onError={(e) => { e.currentTarget.style.display = 'none' }} />
+        <div>
+          <div className="label">Asset File</div>
+          <div className="text-lg font-semibold">{prop.neighborhood} · {prop.bldg_type} · {prop.house_style}</div>
+          <div className="text-xs text-inkmute figure">PID {prop.pid} · Built {prop.year_built} · {prop.total_sqft.toLocaleString()} sq ft total</div>
+        </div>
+        <div className="ml-auto flex gap-8 text-right">
+          <div>
+            <div className="label">AVM Value (booked)</div>
+            <div className="figure text-xl font-semibold text-tealdeep">{usd(prop.avm_value)}</div>
+          </div>
+          <div>
+            <div className="label">Loan Balance</div>
+            <div className="figure text-xl font-semibold">{usd(prop.loan_balance)}</div>
+            <LtvChip ltv={prop.ltv} />
+          </div>
+          <div>
+            <div className="label">Baseline Sale · Variance</div>
+            <div className="figure text-xl font-semibold">{usd(prop.sale_price)}</div>
+            <div className={`figure text-xs font-semibold ${Math.abs(prop.avm_variance_pct) > 0.15 ? 'text-flag' : 'text-inkmute'}`}>
+              AVM {prop.avm_variance_pct >= 0 ? '+' : ''}{pct(prop.avm_variance_pct)} vs sale
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid lg:grid-cols-3 gap-4 items-start">
+        {/* Scenario engine */}
+        <div className="card p-5 space-y-4 lg:col-span-1">
+          <div>
+            <div className="label">Interactive Scenario Panel</div>
+            <div className="text-xs text-inkmute mt-1">Override value drivers and recalculate against the live AVM.</div>
+          </div>
+
+          <div>
+            <div className="flex justify-between text-sm mb-1">
+              <span>Overall Quality</span>
+              <span className="figure font-semibold">{scenario.overall_qual}/10</span>
+            </div>
+            <input type="range" min="1" max="10" value={scenario.overall_qual}
+              onChange={(e) => setF('overall_qual', +e.target.value)} className="w-full accent-teal" />
+          </div>
+
+          <div>
+            <div className="flex justify-between text-sm mb-1">
+              <span>Above Ground Living Area</span>
+              <span className="figure font-semibold">{scenario.gr_liv_area.toLocaleString()} sq ft</span>
+            </div>
+            <input type="range" min="400" max="4500" step="10" value={scenario.gr_liv_area}
+              onChange={(e) => setF('gr_liv_area', +e.target.value)} className="w-full accent-teal" />
+          </div>
+
+          <div>
+            <div className="text-sm mb-1">Kitchen Quality</div>
+            <select value={scenario.kitchen_qual} onChange={(e) => setF('kitchen_qual', +e.target.value)}
+              className="w-full border border-line rounded-sm px-2 py-1.5 text-sm bg-white">
+              {QUAL_OPTS.map((o) => <option key={o.v} value={o.v}>{o.label}</option>)}
+            </select>
+          </div>
+
+          <div>
+            <div className="text-sm mb-1">Functional Deficiency</div>
+            <select value={scenario.functional} onChange={(e) => setF('functional', +e.target.value)}
+              className="w-full border border-line rounded-sm px-2 py-1.5 text-sm bg-white">
+              {FUNC_OPTS.map((o) => <option key={o.v} value={o.v}>{o.label}</option>)}
+            </select>
+          </div>
+
+          <div className="flex gap-2 pt-1">
+            <button onClick={recalc} disabled={running}
+              className="flex-1 bg-teal hover:bg-tealdeep text-white text-sm font-medium py-2 rounded-sm disabled:opacity-50">
+              {running ? 'Scoring…' : 'Recalculate valuation'}
+            </button>
+            <button onClick={resetScenario} className="px-3 border border-line rounded-sm text-sm bg-white">Reset</button>
+          </div>
+
+          {/* Delta meter */}
+          <div className={`rounded-sm border p-4 text-center ${!delta ? 'border-line bg-paper' :
+            delta.usd >= 0 ? 'border-ok/40 bg-ok/5' : 'border-flag/40 bg-flag/5'}`}>
+            <div className="label">Scenario Delta</div>
+            {delta ? (
+              <>
+                <div className={`figure text-2xl font-bold ${delta.usd >= 0 ? 'text-ok' : 'text-flag'}`}>
+                  {delta.usd >= 0 ? '+' : '−'}{usd(Math.abs(delta.usd))} ({delta.usd >= 0 ? '+' : ''}{pct(delta.pct)})
+                </div>
+                <div className="figure text-xs text-inkmute mt-1">
+                  New estimate {usd(result.estimated_market_value)} · band {usd(result.value_low)}–{usd(result.value_high)}
+                </div>
+              </>
+            ) : (
+              <div className="text-sm text-inkmute">Adjust drivers and recalculate to see the valuation shift.</div>
+            )}
+          </div>
+        </div>
+
+        {/* SHAP widget + audit */}
+        <div className="space-y-4 lg:col-span-1">
+          <div className="card p-5">
+            <div className="label">Explainable AI — Value Drivers</div>
+            <div className="text-xs text-inkmute mt-1 mb-2">
+              TreeSHAP contributions for the {result ? 'current scenario' : 'baseline'} estimate of{' '}
+              <span className="figure font-semibold text-ink">{usd(active.estimated_market_value)}</span> (±5%).
+            </div>
+            {active.top_drivers.map((d) => <Contribution key={d.feature} item={d} positive />)}
+            <div className="h-2" />
+            {active.top_detractors.map((d) => <Contribution key={d.feature} item={d} positive={false} />)}
+          </div>
+
+          <div className="card p-5 space-y-3">
+            <div className="label">Audit Lifecycle</div>
+            <div className="flex items-center gap-2">
+              <StatusBadge status={status} />
+            </div>
+            <select value={status} onChange={(e) => setStatus(e.target.value)}
+              className="w-full border border-line rounded-sm px-2 py-1.5 text-sm bg-white">
+              <option>Approved</option>
+              <option>Pending Review</option>
+              <option>Flagged: High Variance</option>
+            </select>
+            <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={4}
+              placeholder="Underwriter notes — shared risk commentary ledger"
+              className="w-full border border-line rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-teal" />
+            <button onClick={saveAudit}
+              className="w-full bg-ink hover:bg-black text-white text-sm font-medium py-2 rounded-sm">
+              {saved ? 'Saved ✓' : 'Save audit decision'}
+            </button>
+          </div>
+        </div>
+
+        {/* Glass-box matrix */}
+        <div className="card p-5 lg:col-span-1">
+          <div className="label mb-2">Glass-Box Feature Matrix</div>
+          {Object.entries(SECTIONS).map(([section, keys]) => (
+            <div key={section} className="mb-4">
+              <div className="text-xs font-semibold text-tealdeep uppercase tracking-wide mb-1">{section}</div>
+              <table className="w-full text-sm">
+                <tbody>
+                  {keys.map((k) => (
+                    <tr key={k} className="border-b border-line last:border-0">
+                      <td className="py-1 text-inkmute">{prop.feature_labels[k] || k}</td>
+                      <td className="py-1 text-right figure">
+                        {typeof scenario[k] === 'number' ? scenario[k].toLocaleString() : String(scenario[k])}
+                        {scenario[k] !== prop.features[k] && <span className="text-amber ml-1" title="Scenario override">●</span>}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}

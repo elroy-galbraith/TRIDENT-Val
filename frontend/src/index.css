@@ -1,0 +1,8 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body { @apply bg-paper text-ink antialiased; }
+.figure { @apply font-mono tabular-nums; }
+.card { @apply bg-white border border-line rounded-md; }
+.label { @apply text-[11px] uppercase tracking-[0.12em] text-inkmute; }
