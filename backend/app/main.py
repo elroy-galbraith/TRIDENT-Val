@@ -1076,13 +1076,25 @@ copilot_http_client = httpx.AsyncClient(timeout=60)
 # bill on its own (auth alone only keeps out anonymous callers). In-memory counters are
 # fine for this PoC's single-process deployment; a multi-worker deploy would need a
 # shared store (e.g. Redis) instead.
-COPILOT_RATE_LIMIT_PER_MINUTE = int(os.environ.get("COPILOT_RATE_LIMIT_PER_MINUTE", "20"))
+try:
+    COPILOT_RATE_LIMIT_PER_MINUTE = int(os.environ.get("COPILOT_RATE_LIMIT_PER_MINUTE", "20"))
+    if COPILOT_RATE_LIMIT_PER_MINUTE < 1:
+        raise ValueError("must be at least 1")
+except ValueError as e:
+    logger.warning("Invalid COPILOT_RATE_LIMIT_PER_MINUTE env var ({e}); falling back to default of 20.", e=e)
+    COPILOT_RATE_LIMIT_PER_MINUTE = 20
 copilot_request_log: dict[int, list[float]] = {}
 
 
 def _check_copilot_rate_limit(user_id: int) -> None:
     now = time.monotonic()
     window_start = now - 60
+    # 1-in-100 chance per request to sweep out users who've fallen out of the window
+    # entirely, so copilot_request_log doesn't grow unbounded over a long-lived process.
+    if random.random() < 0.01:
+        stale_users = [uid for uid, ts in copilot_request_log.items() if not ts or ts[-1] <= window_start]
+        for uid in stale_users:
+            copilot_request_log.pop(uid, None)
     timestamps = [t for t in copilot_request_log.get(user_id, []) if t > window_start]
     if len(timestamps) >= COPILOT_RATE_LIMIT_PER_MINUTE:
         copilot_request_log[user_id] = timestamps
