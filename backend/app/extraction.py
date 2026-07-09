@@ -107,7 +107,18 @@ def _docling_convert(file_path: str) -> str:
     from docling.document_converter import DocumentConverter  # noqa: PLC0415
     converter = DocumentConverter()
     result = converter.convert(file_path)
-    return result.document.export_to_markdown()
+    try:
+        return result.document.export_to_markdown()
+    finally:
+        # The page backend holds native resources (rendered pages, caches) that don't get
+        # freed until explicitly unloaded — repeated conversions (e.g. batch-extracting a
+        # corpus) would otherwise accumulate memory across calls.
+        backend = getattr(getattr(result, "input", None), "_backend", None)
+        if backend is not None:
+            try:
+                backend.unload()
+            except Exception:
+                pass
 
 
 def _extract_fields_via_llm(document_text: str) -> dict:
@@ -182,7 +193,9 @@ def extract_document(db: Session, document_id: int, actor: Optional[str]) -> Ext
 
         matches = []
         for field, kind, tolerance in FIELD_SPECS:
-            entry = extracted.get(field) or {}
+            entry = extracted.get(field)
+            if entry is None:
+                entry = {}
             value = entry.get("value") if isinstance(entry, dict) else entry
             confidence = entry.get("confidence") if isinstance(entry, dict) else None
             truth = document.ground_truth.get(field)

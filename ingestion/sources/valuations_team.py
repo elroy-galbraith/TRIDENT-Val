@@ -19,14 +19,19 @@ def _read_rows() -> list[dict]:
         return []
     rows = []
     for path in sorted(DROPZONE.glob("*.xlsx")):
+        # Workbook doesn't support the context-manager protocol (no __enter__/__exit__) —
+        # only .close() — so this needs an explicit try/finally, not a `with` block.
         wb = openpyxl.load_workbook(path, data_only=True)
-        ws = wb.active
-        header = [str(c.value).strip() if c.value is not None else "" for c in ws[2]]
-        for row_cells in ws.iter_rows(min_row=3):
-            values = [c.value for c in row_cells]
-            if all(v is None for v in values):
-                continue
-            rows.append(dict(zip(header, values)))
+        try:
+            ws = wb.active
+            header = [str(c.value).strip() if c.value is not None else "" for c in ws[2]]
+            for row_cells in ws.iter_rows(min_row=3):
+                values = [c.value for c in row_cells]
+                if all(v is None for v in values):
+                    continue
+                rows.append(dict(zip(header, values)))
+        finally:
+            wb.close()
     return rows
 
 

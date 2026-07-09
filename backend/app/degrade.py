@@ -46,13 +46,13 @@ def degrade_pdf(pdf_bytes: bytes, seed: str, method: str = "img2pdf_photocopy_v1
     """Returns degraded PDF bytes. `seed` should be stable per document (e.g. the pid) so a
     given document always degrades the same way."""
     rng = random.Random(seed)
-    doc = pdfium.PdfDocument(pdf_bytes)
     jpeg_pages = []
-    for page in doc:
-        bitmap = page.render(scale=RENDER_SCALE)
-        img = bitmap.to_pil()
-        degraded = _photocopy_filter(img, rng)
-        buf = io.BytesIO()
-        degraded.save(buf, format="JPEG", quality=70)
-        jpeg_pages.append(buf.getvalue())
+    with pdfium.PdfDocument(pdf_bytes) as doc:  # holds native resources — must be closed
+        for page in doc:
+            bitmap = page.render(scale=RENDER_SCALE)
+            img = bitmap.to_pil()
+            degraded = _photocopy_filter(img, rng)
+            buf = io.BytesIO()
+            degraded.save(buf, format="JPEG", quality=70)
+            jpeg_pages.append(buf.getvalue())
     return img2pdf.convert(jpeg_pages)

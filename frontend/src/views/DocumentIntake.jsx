@@ -129,7 +129,20 @@ function DocumentList({ refreshKey, canExtract, onExtracted }) {
 
   useEffect(() => {
     setData(null)
-    api.documents({ page, page_size: 10 }).then(setData)
+    // Extraction runs are fetched alongside documents (not just populated client-side as
+    // extractions happen this session) so "Last Extraction"/"View fields" survive a page
+    // refresh or navigating away and back — runs come back newest-first, so the first one
+    // seen per document_id is its latest.
+    Promise.all([api.documents({ page, page_size: 10 }), api.extractionRuns()])
+      .then(([docs, runsData]) => {
+        setData(docs)
+        const mapping = {}
+        for (const run of runsData.items || []) {
+          if (!mapping[run.document_id]) mapping[run.document_id] = run
+        }
+        setRunByDoc(mapping)
+      })
+      .catch((e) => logger.error('document-intake', `Failed to load documents/runs: ${e.message}`))
   }, [page, refreshKey])
 
   const extract = async (docId) => {
