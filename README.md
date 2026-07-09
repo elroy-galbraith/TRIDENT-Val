@@ -44,14 +44,17 @@ data/ames_raw.csv          De Cock Ames dataset (2,930 rows, zero-scrape ingesti
 scripts/train_model.py     LightGBM on log1p(SalePrice); 26 curated features
 scripts/seed_db.py         DB instantiation + bank_portfolio_meta + image mapping
 backend/app/
-  models.py                properties / bank_portfolio_meta / property_images
+  models.py                properties / bank_portfolio_meta / property_images / system_logs
   inference.py             AVM scoring + native TreeSHAP contributions (pred_contrib)
+  logging_config.py        loguru setup: console, rotating file, and DB sinks
   main.py                  REST API (see below)
-frontend/src/views/
-  Dashboard.jsx            View 1 — exposure, avg LTV, triage count, LTV histogram,
+frontend/src/
+  logger.js                loglevel wrapper: human-readable console + remote shipping
+  views/
+    Dashboard.jsx          View 1 — exposure, avg LTV, triage count, LTV histogram,
                            neighborhood concentration chart
-  PortfolioGrid.jsx        View 2 — listing-style cards, filters, sort, CSV export
-  Inspector.jsx            View 3 — glass-box matrix, SHAP widget, what-if scenario
+    PortfolioGrid.jsx      View 2 — listing-style cards, filters, sort, CSV export
+    Inspector.jsx          View 3 — glass-box matrix, SHAP widget, what-if scenario
                            panel, delta meter, audit lifecycle box
 ```
 
@@ -65,6 +68,8 @@ frontend/src/views/
 | POST | `/api/v1/valuate` | Live what-if inference (±5% band + drivers) |
 | PATCH | `/api/v1/properties/{pid}/audit` | Underwriter notes + status writeback |
 | GET | `/api/v1/properties/export` | Structural CSV download |
+| GET | `/api/v1/logs` | Query the unified operational/audit log ledger |
+| POST | `/api/v1/logs/client` | Ingest batched frontend (loglevel) log entries |
 
 ### Design notes
 
@@ -73,6 +78,12 @@ frontend/src/views/
 - **Explainability is real, not mocked**: LightGBM's `pred_contrib=True` returns exact
   TreeSHAP values; contributions are converted to dollar impact at the prediction point.
 - **Loan balances** use a seeded RNG (deterministic across rebuilds).
+- **Logging**: the backend (`loguru`) and frontend (`loglevel`) both log in a
+  human-readable, timestamped format, and both feed the same `system_logs` table —
+  request/inference telemetry, underwriter audit-trail events (status/notes changes,
+  scenario re-valuations), and frontend errors/usage events all land in one place,
+  queryable via `GET /api/v1/logs`. Backend logs also go to a rotating `logs/backend.log`
+  file for local debugging.
 - Out of scope per PRD: auth/multi-tenancy, geospatial map servers, document generation.
 
 ## PRD success metrics

@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react'
 import { api, pct, usd } from '../api.js'
 import { LtvChip, Spinner, StatusBadge } from '../components/shared.jsx'
 import PropertyMap from '../components/PropertyMap.jsx'
+import { logger } from '../logger.js'
 
 const QUAL_OPTS = [
   { v: 5, label: 'Excellent' }, { v: 4, label: 'Good' }, { v: 3, label: 'Typical/Average' },
@@ -77,11 +78,19 @@ export default function Inspector({ pid, onBack, onOpen }) {
   const setF = (k, v) => setScenario((s) => ({ ...s, [k]: v }))
   const recalc = async () => {
     setRunning(true)
-    try { setResult(await api.valuate(scenario)) } finally { setRunning(false) }
+    try {
+      const changed = Object.keys(scenario).filter((k) => scenario[k] !== prop.features[k])
+      const r = await api.valuate(scenario)
+      logger.track('inspector', `Ran scenario re-valuation for PID ${pid}: ${usd(r.estimated_market_value)}.`,
+        { changed_features: changed, estimated_market_value: r.estimated_market_value }, pid)
+      setResult(r)
+    } finally { setRunning(false) }
   }
   const resetScenario = () => { setScenario({ ...prop.features }); setResult(null) }
   const saveAudit = async () => {
     const r = await api.updateAudit(pid, { audit_status: status, underwriter_notes: notes })
+    logger.track('inspector', `Saved audit decision for PID ${pid}: ${r.audit_status}.`,
+      { audit_status: r.audit_status, notes_length: notes.length }, pid)
     setStatus(r.audit_status); setSaved(true); setTimeout(() => setSaved(false), 2000)
   }
 
