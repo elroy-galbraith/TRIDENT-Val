@@ -46,8 +46,11 @@ export function Spinner({ label = 'Loading…' }) {
 }
 
 // Labeled image carousel — no third-party slider dependency, just prev/next + dot controls.
-export function Carousel({ images, className = '', imgClassName = 'h-64' }) {
-  const [i, setI] = useState(0)
+// `index`/`onIndexChange` are optional: pass both to drive the carousel from an external
+// control (e.g. a thumbnail rail) instead of its own internal state.
+export function Carousel({ images, className = '', imgClassName = 'h-64',
+  index: controlledIndex, onIndexChange, showDots = true }) {
+  const [internalIndex, setInternalIndex] = useState(0)
   const list = images || []
 
   if (list.length === 0) {
@@ -58,9 +61,14 @@ export function Carousel({ images, className = '', imgClassName = 'h-64' }) {
     )
   }
 
-  const index = ((i % list.length) + list.length) % list.length
+  const rawIndex = controlledIndex != null ? controlledIndex : internalIndex
+  const index = ((rawIndex % list.length) + list.length) % list.length
   const img = list[index]
-  const go = (n) => setI(n)
+  const go = (n) => {
+    const next = ((n % list.length) + list.length) % list.length
+    if (onIndexChange) onIndexChange(next)
+    else setInternalIndex(next)
+  }
 
   return (
     <div className={className}>
@@ -89,7 +97,7 @@ export function Carousel({ images, className = '', imgClassName = 'h-64' }) {
           </div>
         )}
       </div>
-      {list.length > 1 && (
+      {showDots && list.length > 1 && (
         <div className="flex justify-center gap-1.5 mt-2">
           {list.map((im, idx) => (
             <button key={idx} type="button" onClick={() => go(idx)}

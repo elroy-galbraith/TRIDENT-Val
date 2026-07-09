@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { api, pct, usd } from '../api.js'
-import { Carousel, LtvChip, ModelStatusBadge, Spinner, StatusBadge } from '../components/shared.jsx'
+import { Carousel, FALLBACK_IMG, LtvChip, ModelStatusBadge, Spinner, StatusBadge } from '../components/shared.jsx'
 import PropertyMap from '../components/PropertyMap.jsx'
 import { logger } from '../logger.js'
 
@@ -51,11 +51,12 @@ export default function Inspector({ pid, onBack, onOpen, user }) {
   const [manualValue, setManualValue] = useState('')
   const [decisionBusy, setDecisionBusy] = useState(false)
   const [decisionSaved, setDecisionSaved] = useState(false)
+  const [photoIndex, setPhotoIndex] = useState(0)
 
   const loadValuations = () => api.propertyValuations(pid).then(setValuations).catch(() => setValuations(null))
 
   useEffect(() => {
-    setProp(null); setResult(null); setValuations(null); setDecisionRationale('')
+    setProp(null); setResult(null); setValuations(null); setDecisionRationale(''); setPhotoIndex(0)
     api.property(pid).then((p) => {
       setProp(p)
       setScenario({ ...p.features })
@@ -178,7 +179,23 @@ export default function Inspector({ pid, onBack, onOpen, user }) {
       {prop.images && prop.images.length > 0 && (
         <div className="card p-5">
           <div className="label mb-2">Property Photos</div>
-          <Carousel images={prop.images} className="max-w-md" imgClassName="h-64" />
+          <div className="flex flex-col md:flex-row gap-4">
+            <Carousel images={prop.images} index={photoIndex} onIndexChange={setPhotoIndex} showDots={false}
+              className="md:w-[440px] flex-none" imgClassName="h-72" />
+            <div className="flex-1 grid grid-cols-[repeat(auto-fill,minmax(110px,1fr))] gap-2 content-start">
+              {prop.images.map((img, idx) => (
+                <button key={img.url} type="button" onClick={() => setPhotoIndex(idx)}
+                  aria-label={`View photo: ${img.label || `Photo ${idx + 1}`}`}
+                  className={`text-left rounded-sm overflow-hidden border transition-colors ${
+                    idx === photoIndex ? 'border-teal ring-1 ring-teal' : 'border-line hover:border-teal/50'}`}>
+                  <img src={img.url} alt=""
+                    onError={(e) => { e.currentTarget.onerror = null; e.currentTarget.src = FALLBACK_IMG }}
+                    className="w-full h-16 object-cover" />
+                  {img.label && <div className="text-[11px] px-1.5 py-1 truncate text-inkmute">{img.label}</div>}
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
       )}
 
