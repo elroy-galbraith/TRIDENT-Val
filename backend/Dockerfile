@@ -16,4 +16,4 @@ COPY scripts /srv/scripts
 COPY data /srv/data
 ENV PYTHONPATH=/srv:/srv/scripts
 EXPOSE 8000
-CMD ["sh", "-c", "python scripts/wait_and_seed.py && uvicorn app.main:app --host 0.0.0.0 --port 8000"]
+CMD ["sh", "-c", "python scripts/wait_and_seed.py && uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
