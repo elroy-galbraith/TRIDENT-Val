@@ -4,6 +4,7 @@ import {
 } from 'recharts'
 import { api, pct, usd } from '../api.js'
 import { Spinner } from '../components/shared.jsx'
+import { setChartSummary } from '../copilot.js'
 import MapView from './MapView.jsx'
 
 const bucketColor = { '<60%': '#2E7D4F', '60-80%': '#C77D0A', '>80%': '#B3352C' }
@@ -22,7 +23,13 @@ export default function Dashboard({ onTriage, onOpen }) {
   const [data, setData] = useState(null)
   const [err, setErr] = useState(null)
 
-  useEffect(() => { api.summary().then(setData).catch((e) => setErr(e.message)) }, [])
+  useEffect(() => {
+    api.summary().then((d) => {
+      setData(d)
+      setChartSummary('ltv_distribution', d.ltv_distribution)
+      setChartSummary('neighborhood_concentration', d.neighborhood_concentration)
+    }).catch((e) => setErr(e.message))
+  }, [])
 
   if (err) return <div className="py-16 text-center text-flag text-sm">Couldn't load portfolio summary: {err}</div>
   if (!data) return <Spinner label="Scoring portfolio…" />

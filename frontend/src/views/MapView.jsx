@@ -38,6 +38,7 @@ export default function MapView({ onOpen, height = 560 }) {
         <select
           value={statusFilter}
           onChange={(e) => setStatusFilter(e.target.value)}
+          aria-label="Filter map by audit status"
           className="border border-line rounded-sm px-2 py-1.5 text-sm bg-white ml-auto"
         >
           <option value="">All audit statuses</option>

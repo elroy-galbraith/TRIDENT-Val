@@ -37,6 +37,32 @@ On Windows PowerShell replace the seed line with:
 python scripts/train_model.py   # rewrites model/avm_lgbm.joblib + model/feature_spec.json
 ```
 
+## AI Copilot (page-agent)
+
+The frontend ships [page-agent](https://github.com/alibaba/page-agent) — a floating,
+in-page agent that reads the DOM as text and drives the UI on the user's behalf (open a
+property, change a filter, walk through a chart) via natural-language requests. It talks
+an OpenAI-compatible chat-completions API.
+
+The LLM API key is never sent to the browser: `frontend/src/copilot.js` points
+page-agent's `baseURL` at `/api/v1/copilot`, a same-origin FastAPI proxy
+(`backend/app/main.py`) that attaches the real key and forwards to the provider. Configure
+it with:
+
+| Env var | Default | Purpose |
+|---|---|---|
+| `COPILOT_PROVIDER_API_KEY` | *(empty)* | Provider API key. Unset = the proxy returns 503 and the widget is inert. |
+| `COPILOT_PROVIDER_BASE_URL` | Gemini's OpenAI-compat endpoint | Swap for Anthropic's OpenAI-compatible endpoint, OpenAI itself, etc. |
+| `COPILOT_MODEL` | `gemini-2.5-flash` | Server-controlled — the browser cannot override which model is billed. |
+
+**Guardrails:** the audit status dropdown, underwriter notes field, and "Save audit
+decision" button on the Inspector carry a `data-page-agent-not-interactive` attribute, so
+the agent can read them but cannot click or type into them — an AI copilot should not be
+able to write to the audit ledger unsupervised. The Risk Overview charts are SVG and
+unreadable as DOM text; `transformPageContent` in `copilot.js` appends their underlying
+JSON (LTV distribution, neighborhood concentration) to the agent's context so it can
+answer chart questions without guessing.
+
 ## Architecture
 
 ```
@@ -50,6 +76,7 @@ backend/app/
   main.py                  REST API (see below)
 frontend/src/
   logger.js                loglevel wrapper: human-readable console + remote shipping
+  copilot.js               page-agent setup: proxy baseURL, task context, chart summaries
   views/
     Dashboard.jsx          View 1 — exposure, avg LTV, triage count, LTV histogram,
                            neighborhood concentration chart
@@ -70,6 +97,7 @@ frontend/src/
 | GET | `/api/v1/properties/export` | Structural CSV download |
 | GET | `/api/v1/logs` | Query the unified operational/audit log ledger |
 | POST | `/api/v1/logs/client` | Ingest batched frontend (loglevel) log entries |
+| POST | `/api/v1/copilot/chat/completions` | AI copilot LLM proxy (see below) |
 
 ### Design notes
 

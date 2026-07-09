@@ -1,9 +1,10 @@
-import React, { useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import Dashboard from './views/Dashboard.jsx'
 import PortfolioGrid from './views/PortfolioGrid.jsx'
 import Inspector from './views/Inspector.jsx'
 import MapView from './views/MapView.jsx'
 import { logger } from './logger.js'
+import { createCopilot } from './copilot.js'
 
 const TABS = [
   { id: 'dashboard', label: 'Risk Overview' },
@@ -15,6 +16,11 @@ export default function App() {
   const [view, setView] = useState('dashboard')
   const [pid, setPid] = useState(null)
   const [gridStatus, setGridStatus] = useState('')
+
+  useEffect(() => {
+    const copilot = createCopilot()
+    return () => copilot.dispose()
+  }, [])
 
   const openProperty = (id) => {
     logger.track('app', `Opened property inspector for PID ${id}.`, null, id)
