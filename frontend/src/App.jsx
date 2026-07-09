@@ -3,6 +3,7 @@ import Dashboard from './views/Dashboard.jsx'
 import PortfolioGrid from './views/PortfolioGrid.jsx'
 import Inspector from './views/Inspector.jsx'
 import MapView from './views/MapView.jsx'
+import ModelCard from './views/ModelCard.jsx'
 import { logger } from './logger.js'
 import { createCopilot } from './copilot.js'
 
@@ -10,6 +11,7 @@ const TABS = [
   { id: 'dashboard', label: 'Risk Overview' },
   { id: 'portfolio', label: 'Portfolio' },
   { id: 'map', label: 'Map' },
+  { id: 'model-card', label: 'Model Card' },
 ]
 
 export default function App() {
@@ -83,6 +85,7 @@ export default function App() {
           <PortfolioGrid key={gridStatus} onOpen={openProperty} initialStatus={gridStatus} />
         )}
         {view === 'map' && <MapView onOpen={openProperty} />}
+        {view === 'model-card' && <ModelCard onBrowse={() => openTab('portfolio')} />}
         {view === 'inspector' && <Inspector pid={pid} onBack={() => setView('portfolio')} onOpen={openProperty} />}
       </main>
 

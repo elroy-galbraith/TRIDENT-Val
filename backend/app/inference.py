@@ -32,6 +32,46 @@ LABELS = {
     "ms_zoning": "Zoning", "central_air": "Central Air",
 }
 
+# One plain-language sentence per feature for the Model Card page — written for a
+# non-technical auditor, not a data scientist.
+FEATURE_EXPLANATIONS = {
+    "gr_liv_area": "Total finished living space above ground, in square feet. Larger homes "
+        "almost always score higher.",
+    "total_bsmt_sf": "Total basement square footage, finished or not — extra usable area even "
+        "when it isn't \"living space\" on paper.",
+    "first_flr_sf": "Square footage of the first (ground) floor.",
+    "garage_area": "Garage square footage.",
+    "garage_cars": "How many cars the garage can hold.",
+    "lot_area": "Total lot size in square feet, including yard and driveway.",
+    "year_built": "Original construction year — newer homes generally score higher unless "
+        "offset by a strong remodel.",
+    "year_remod_add": "Year of the most recent remodel or addition (equals Year Built if the "
+        "home was never remodeled).",
+    "full_bath": "Number of full bathrooms above ground.",
+    "half_bath": "Number of half bathrooms (sink + toilet, no shower/tub) above ground.",
+    "bedroom_abvgr": "Bedrooms located above ground; basement bedrooms aren't counted here.",
+    "totrms_abvgrd": "Total rooms above ground, excluding bathrooms.",
+    "fireplaces": "Number of fireplaces.",
+    "overall_qual": "Overall material and finish quality, rated 1 (very poor) to 10 "
+        "(excellent) by the original assessor. Typically the single strongest driver.",
+    "overall_cond": "Overall upkeep/condition, rated 1 to 10 — distinct from quality, which is "
+        "about materials, not maintenance.",
+    "mas_vnr_area": "Masonry veneer area (brick or stone facing), in square feet.",
+    "kitchen_qual": "Kitchen quality rating: Excellent, Good, Typical/Average, Fair, or Poor.",
+    "exter_qual": "Exterior material quality, same Excellent-to-Poor scale.",
+    "bsmt_qual": "Basement quality rating, based on ceiling height and finish.",
+    "heating_qc": "Heating system quality and condition rating.",
+    "functional": "Functionality deductions — flags typical homes vs. ones with known "
+        "deficiencies (e.g. needed repairs).",
+    "neighborhood": "Ames, Iowa neighborhood or subdivision — the model's strongest proxy for "
+        "location.",
+    "bldg_type": "Building type: single-family, duplex, or townhouse variants.",
+    "house_style": "Architectural style — e.g. one-story, two-story, split-level.",
+    "ms_zoning": "General zoning classification (residential low/medium density, commercial, "
+        "etc.).",
+    "central_air": "Whether the home has central air conditioning.",
+}
+
 
 @lru_cache(maxsize=1)
 def get_model():
@@ -93,4 +133,46 @@ def valuate_with_drivers(payload: dict, top_k: int = 3) -> dict:
         "value_high": round(value * (1 + ERROR_BAND), 2),
         "top_drivers": drivers,
         "top_detractors": detractors,
+    }
+
+
+def global_importance(payloads: list[dict]) -> dict:
+    """Average |dollar impact| per feature across a population of properties.
+
+    Same TreeSHAP (pred_contrib) machinery as valuate_with_drivers, run in one batch over
+    the whole portfolio instead of a single property — this is what backs the Model Card's
+    "what drives the model" chart. The caller is expected to cache the result: property
+    feature vectors are immutable after seeding, so this doesn't need to re-run per request.
+    """
+    if not payloads:  # e.g. requested before seeding has populated the properties table
+        return {"sample_size": 0, "drivers": []}
+
+    spec = get_spec()
+    model = get_model()
+    X = build_frame(payloads)
+
+    log_pred = model.predict(X)
+    values = np.expm1(log_pred)
+    contrib = model.predict(X, pred_contrib=True)  # (n, n_features + 1); last col is base value
+    feat_contrib = contrib[:, :-1]
+    dollar = values[:, None] * (1 - np.exp(-feat_contrib))
+
+    mean_abs = np.abs(dollar).mean(axis=0)
+    mean_signed = dollar.mean(axis=0)
+    total = float(mean_abs.sum()) or 1.0
+
+    ranked = sorted(zip(spec["features"], mean_abs, mean_signed), key=lambda t: t[1], reverse=True)
+    return {
+        "sample_size": len(payloads),
+        "drivers": [
+            {
+                "feature": f,
+                "label": LABELS.get(f, f),
+                "explanation": FEATURE_EXPLANATIONS.get(f, ""),
+                "mean_abs_impact_usd": round(float(a)),
+                "mean_signed_impact_usd": round(float(s)),
+                "share_pct": round(float(a) / total, 4),
+            }
+            for f, a, s in ranked
+        ],
     }

@@ -48,6 +48,7 @@ export const api = {
   property: (pid) => get(`/properties/${pid}`),
   comps: (pid, limit = 6) => get(`/properties/${pid}/comps?limit=${limit}`),
   spec: () => get('/model/spec'),
+  importance: () => get('/model/importance'),
   valuate: (features) => send('POST', '/valuate', { features }, 'valuation failed'),
   updateAudit: (pid, body) => send('PATCH', `/properties/${pid}/audit`, body, 'audit update failed'),
   exportUrl: `${BASE}/properties/export`,

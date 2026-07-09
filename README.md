@@ -101,6 +101,10 @@ frontend/src/
     PortfolioGrid.jsx      View 2 — listing-style cards, filters, sort, CSV export
     Inspector.jsx          View 3 — glass-box matrix, SHAP widget, what-if scenario
                            panel, delta meter, audit lifecycle box
+    ModelCard.jsx          View 4 — plain-language model card for non-technical auditors:
+                           what the model does, holdout accuracy, training data
+                           provenance, interactive global feature-importance chart,
+                           limitations & appropriate use
 ```
 
 ### Key API endpoints
@@ -113,6 +117,8 @@ frontend/src/
 | POST | `/api/v1/valuate` | Live what-if inference (±5% band + drivers) |
 | PATCH | `/api/v1/properties/{pid}/audit` | Underwriter notes + status writeback |
 | GET | `/api/v1/properties/export` | Structural CSV download |
+| GET | `/api/v1/model/spec` | Feature spec + holdout MAPE/R² (drives the UI + Model Card) |
+| GET | `/api/v1/model/importance` | Portfolio-wide average TreeSHAP $ impact per feature, cached (Model Card chart) |
 | GET | `/api/v1/logs` | Query the unified operational/audit log ledger |
 | POST | `/api/v1/logs/client` | Ingest batched frontend (loglevel) log entries |
 | POST | `/api/v1/copilot/chat/completions` | AI copilot LLM proxy (see below) |
