@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { api, ltvTier, tierColor, usd } from '../api.js'
 import { LtvChip, Spinner, StatusBadge } from '../components/shared.jsx'
+import { logger } from '../logger.js'
 
 const FALLBACK_IMG =
   'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360"><rect width="100%25" height="100%25" fill="%23DDE3E0"/><text x="50%25" y="50%25" font-family="sans-serif" font-size="16" fill="%235B6B77" text-anchor="middle">Residential asset</text></svg>'
@@ -104,6 +105,12 @@ export default function PortfolioGrid({ onOpen, initialStatus }) {
           <option value="pid">PID</option>
         </select>
         <a href={api.exportUrl} aria-label="Download portfolio as CSV" className="text-sm text-teal hover:underline px-2">Download CSV</a>
+        <a href={api.portfolioReportUrl()} target="_blank" rel="noopener noreferrer"
+          onClick={() => logger.track('portfolio_grid', 'Exported portfolio review summary.')}
+          aria-label="Export portfolio review summary as PDF"
+          className="text-sm text-teal hover:underline px-2">
+          Export Report ↗
+        </a>
       </div>
 
       {loading ? <Spinner label="Loading inventory…" /> : (

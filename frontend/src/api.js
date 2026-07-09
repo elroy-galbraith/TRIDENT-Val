@@ -72,6 +72,11 @@ export const api = {
     send('POST', `/models/${id}/promote`, { rationale }, 'promotion failed'),
   compareModels: (params) => get(`/models/compare?${new URLSearchParams(params)}`),
   disagreements: (params) => get(`/models/disagreements?${new URLSearchParams(params)}`),
+  assetReportUrl: (pid) => `${BASE}/properties/${pid}/report`,
+  portfolioReportUrl: (params) => {
+    const qs = params && Object.keys(params).length ? `?${new URLSearchParams(params)}` : ''
+    return `${BASE}/portfolio/report${qs}`
+  },
 }
 
 export const usd = (n, digits = 0) =>

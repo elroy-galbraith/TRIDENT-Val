@@ -212,6 +212,69 @@ reflection/action summaries (not the full page-content payload sent to the LLM, 
 transits the network), so it's a smaller but real exposure of whatever's on screen when the
 agent acts — worth keeping in mind alongside the audit-ledger fencing above.
 
+## Report Export (IVS 103 / RICS Red Book VPS 6)
+
+Two exportable PDF reports, rendered entirely server-side (FastAPI + Jinja2 + WeasyPrint —
+`backend/app/reports.py`, `backend/app/templates/`; no browser rendering involved): a
+per-asset **Underwriter Decision Report** and a portfolio-wide **Portfolio Review Summary**.
+Both are structured against the IVS 103 / RICS Red Book VPS 6 minimum-content skeleton —
+asset identification, valuation date, basis of value, approach and model used, key inputs and
+significant assumptions, limitations, and sign-off — the professional anchor a RICS-trained
+valuer (JN Bank's own included) will recognize, rather than a generic "export PDF" button.
+
+**Framing matters.** Under IVS, no model output — an AVM included — constitutes a compliant
+valuation without a valuer's professional judgement applied to it. So this is deliberately
+*not* "the AVM's valuation report" — it's the **underwriter's decision record, supported by
+AVM output**, built from the same audit lifecycle (`audit_status`, `underwriter_notes`, and
+the `system_logs` decision trail) described above. Every report is explicit about what it is:
+it is never labeled "RICS-compliant" (that requires a Registered Valuer's direct involvement),
+only "structured in accordance with IVS 103 / RICS Red Book VPS 6 reporting requirements" —
+and if an asset's audit status isn't yet Approved, the report says so in a banner up front
+rather than reading like a completed sign-off.
+
+**The LLM narrates, it never computes.** Every figure in a report is pulled straight from the
+database or the same inference pipeline behind the Inspector page (`backend/app/inference.py`)
+— nothing is calculated freshly for the PDF. The only generated text is a handful of short
+narrative paragraphs — variance commentary from the SHAP driver table, a champion/challenger
+disagreement explanation, a synthesis of the underwriter's own notes, and asset-specific
+limitations context (portfolio report: one executive summary) — drafted at low temperature
+(0.2, `backend/app/narrative.py`) from a prompt that embeds only the report's own structured
+data and explicitly forbids introducing any number or claim not already in that payload.
+Generated sections are visibly delimited in the document (dashed "AI-drafted" boxes) so a
+reader always knows which paragraphs are narration versus structured data. Every report also
+carries a standing **AI Use & Compliance Disclosure** box naming the drafting model, which
+sections it drafted, and who reviewed/booked the underlying decision — RICS's responsible-AI
+disclosure expectation made literal, not a compliance checkbox.
+
+Reports still generate in full with no LLM configured — "AI-drafted" sections render a
+clearly-labeled placeholder instead of prose, and every figure they would have referenced is
+already in the report's structured data either way.
+
+Routed through **OpenRouter** (an OpenAI-compatible model aggregator) so the drafting model
+can be swapped by config alone; defaults to **Gemini 2.5 Flash**. This is a separate,
+server-side-only LLM call from the AI copilot above, with its own provider config — the
+narrative text is baked into the PDF at generation time, and (like the copilot) the provider
+API key never has a code path to the browser.
+
+| Env var | Default | Purpose |
+|---|---|---|
+| `REPORT_LLM_PROVIDER_API_KEY` | *(empty)* | OpenRouter API key. Unset = reports still generate in full; AI-drafted sections show a placeholder instead of prose. |
+| `REPORT_LLM_PROVIDER_BASE_URL` | `https://openrouter.ai/api/v1` | Swap for any other OpenAI-compatible aggregator/provider. |
+| `REPORT_LLM_MODEL` | `google/gemini-2.5-flash` | Drafting model, addressed by its OpenRouter slug. |
+
+**Endpoints:** `GET /api/v1/properties/{pid}/report` and `GET /api/v1/portfolio/report`
+(the latter takes optional `?champion=&challenger=` to pick which two registered models the
+governance section compares). Both open to any logged-in role, same precedent as the CSV
+export — exporting is a different format of data every role can already see live in-app, not
+a new write privilege. Every export is itself logged to the audit ledger
+(`GET /api/v1/logs`), naming who generated it and when.
+
+**Running WeasyPrint locally (no Docker):** it needs Pango/Fontconfig's native libraries, not
+just the `weasyprint` pip package. On Debian/Ubuntu: `apt install libpango-1.0-0
+libpangoft2-1.0-0 libfontconfig1 fonts-liberation` (see `backend/Dockerfile` for the Docker
+path, which installs these automatically). WeasyPrint itself needs no cairo/GDK-Pixbuf install
+— recent versions render through a pure-Python backend.
+
 ## Architecture
 
 ```
@@ -229,6 +292,11 @@ backend/app/
   inference.py             Model-ID-keyed scoring; tree_shap (native TreeSHAP) and
                            linear_coef (exact coefficient attribution) explainers
   logging_config.py        loguru setup: console, rotating file, and DB sinks
+  narrative.py             OpenRouter client for report narrative drafting (low-temperature,
+                           grounded-only prompting; see Report Export above)
+  reports.py               Report data assembly (IVS 103 / Red Book VPS 6 context) + Jinja2 ->
+                           WeasyPrint PDF rendering
+  templates/               report.css + asset_report.html + portfolio_report.html
   main.py                  REST API (see below)
 frontend/src/
   logger.js                loglevel wrapper: human-readable console + remote shipping
@@ -268,6 +336,8 @@ All endpoints below require a logged-in session unless noted; ⚑ marks Underwri
 | PATCH | `/api/v1/properties/{pid}/audit` | ⚑ Underwriter notes + status writeback |
 | POST | `/api/v1/properties/{pid}/triage-decision` | ⚑ Resolve a champion/challenger disagreement (book champion/challenger/manual + rationale) |
 | GET | `/api/v1/properties/export` | Structural CSV download |
+| GET | `/api/v1/properties/{pid}/report` | Underwriter Decision Report (PDF) — see Report Export |
+| GET | `/api/v1/portfolio/report` | Portfolio Review Summary (PDF) — see Report Export |
 | GET | `/api/v1/models` | The model risk inventory: every registered model + governance status |
 | GET | `/api/v1/models/{model_id}` \| `/spec` \| `/importance` | Per-model card, feature spec, portfolio-wide feature importance (cached) |
 | POST | `/api/v1/models/{model_id}/promote` | ⚑⚑ Admin-only: designate a new champion, re-book the whole portfolio |
@@ -296,8 +366,10 @@ All endpoints below require a logged-in session unless noted; ⚑ marks Underwri
   session via `system_logs.actor` where one exists (see
   [Authentication & Roles](#authentication--roles-poc-grade)). Backend logs also go to a
   rotating `logs/backend.log` file for local debugging.
-- Out of scope per PRD: multi-tenancy, geospatial map servers, document generation.
-  Auth now exists in lightweight, PoC-grade form — see
+- Out of scope per PRD: multi-tenancy, geospatial map servers. Document generation (exported
+  PDF reports) is covered below — see
+  [Report Export](#report-export-ivs-103--rics-red-book-vps-6). Auth now exists in
+  lightweight, PoC-grade form — see
   [Authentication & Roles](#authentication--roles-poc-grade).
 
 ## PRD success metrics
