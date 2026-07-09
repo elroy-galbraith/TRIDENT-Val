@@ -4,6 +4,7 @@ import {
 } from 'recharts'
 import { api, pct, usd } from '../api.js'
 import { Spinner } from '../components/shared.jsx'
+import MapView from './MapView.jsx'
 
 const bucketColor = { '<60%': '#2E7D4F', '60-80%': '#C77D0A', '>80%': '#B3352C' }
 
@@ -17,7 +18,7 @@ function Banner({ label, value, sub, accent }) {
   )
 }
 
-export default function Dashboard({ onTriage }) {
+export default function Dashboard({ onTriage, onOpen }) {
   const [data, setData] = useState(null)
   const [err, setErr] = useState(null)
 
@@ -91,6 +92,12 @@ export default function Dashboard({ onTriage }) {
             </BarChart>
           </ResponsiveContainer>
         </div>
+      </div>
+
+      <div>
+        <div className="label mb-1">Portfolio Map</div>
+        <div className="text-xs text-inkmute mb-3">Full geographic distribution of the book, sized by AVM value and colored by LTV risk tier.</div>
+        <MapView onOpen={onOpen} height={480} />
       </div>
     </div>
   )

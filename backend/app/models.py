@@ -31,6 +31,8 @@ class Property(Base):
     bedroom_abvgr = Column(Integer)
     sale_price = Column(Numeric(12, 2))       # baseline observed sale (ground truth)
     features = Column(JSON)                    # full model feature vector (glass-box matrix)
+    lat = Column(Float)                         # geocoded at seed time, see app.geo
+    lng = Column(Float)
 
     meta = relationship("BankPortfolioMeta", back_populates="prop", uselist=False,
                         cascade="all, delete-orphan")

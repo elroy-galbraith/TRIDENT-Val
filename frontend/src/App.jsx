@@ -2,10 +2,12 @@ import React, { useState } from 'react'
 import Dashboard from './views/Dashboard.jsx'
 import PortfolioGrid from './views/PortfolioGrid.jsx'
 import Inspector from './views/Inspector.jsx'
+import MapView from './views/MapView.jsx'
 
 const TABS = [
   { id: 'dashboard', label: 'Risk Overview' },
   { id: 'portfolio', label: 'Portfolio' },
+  { id: 'map', label: 'Map' },
 ]
 
 export default function App() {
@@ -39,11 +41,12 @@ export default function App() {
       </header>
 
       <main className="max-w-7xl mx-auto px-6 py-6">
-        {view === 'dashboard' && <Dashboard onTriage={openTriage} />}
+        {view === 'dashboard' && <Dashboard onTriage={openTriage} onOpen={openProperty} />}
         {view === 'portfolio' && (
           <PortfolioGrid key={gridStatus} onOpen={openProperty} initialStatus={gridStatus} />
         )}
-        {view === 'inspector' && <Inspector pid={pid} onBack={() => setView('portfolio')} />}
+        {view === 'map' && <MapView onOpen={openProperty} />}
+        {view === 'inspector' && <Inspector pid={pid} onBack={() => setView('portfolio')} onOpen={openProperty} />}
       </main>
 
       <footer className="max-w-7xl mx-auto px-6 py-4 text-[11px] text-inkmute border-t border-line">
