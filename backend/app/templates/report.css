@@ -112,6 +112,11 @@ td.num, th.num { text-align: right; font-family: "Liberation Mono", monospace; }
 .cols { display: flex; gap: 10pt; }
 .col { flex: 1; }
 
+.photo-grid { display: flex; gap: 6pt; margin-bottom: 10pt; }
+.photo-grid figure { flex: 1; margin: 0; min-width: 0; }
+.photo-grid img { display: block; width: 100%; height: 58pt; object-fit: cover; border-radius: 2pt; border: 0.75pt solid #DDE3E0; }
+.photo-grid figcaption { font-size: 6.5pt; color: #5B6B77; text-align: center; margin-top: 2pt; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
 .kv { display: flex; justify-content: space-between; padding: 2pt 0; border-bottom: 0.5pt solid #DDE3E0; }
 .kv:last-child { border-bottom: none; }
 .kv .k { color: #5B6B77; }

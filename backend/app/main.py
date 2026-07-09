@@ -24,7 +24,7 @@ from .auth import DUMMY_PASSWORD_HASH, get_current_user, require_role, verify_pa
 from .db import Base, engine, get_db
 from .logging_config import setup_logging
 from .models import (AuditStatus, BankPortfolioMeta, ModelStatus, ModelValuation,
-                     Property, RegisteredModel, SystemLog, User, UserRole)
+                     Property, PropertyImage, RegisteredModel, SystemLog, User, UserRole)
 
 setup_logging()
 
@@ -179,6 +179,10 @@ def resolve_challenger(db: Session, model_id: Optional[str]) -> RegisteredModel:
     return m
 
 
+def image_out(img: PropertyImage) -> dict:
+    return {"url": img.url, "label": img.label, "category": img.category}
+
+
 def card(p: Property) -> dict:
     return {
         "pid": p.pid,
@@ -195,7 +199,7 @@ def card(p: Property) -> dict:
         "loan_balance": float(p.meta.current_loan_balance),
         "ltv": round(p.meta.ltv, 4),
         "audit_status": p.meta.audit_status.value,
-        "image_url": p.image.url if p.image else None,
+        "images": [image_out(img) for img in p.images],
     }
 
 
@@ -409,7 +413,7 @@ def model_disagreements(
             .join(BankPortfolioMeta)
             .join(mv_champ, (mv_champ.pid == Property.pid) & (mv_champ.model_id == champ.id))
             .join(mv_chal, (mv_chal.pid == Property.pid) & (mv_chal.model_id == chal.id))
-            .options(joinedload(Property.meta), joinedload(Property.image))
+            .options(joinedload(Property.meta), joinedload(Property.images))
             .all())
     items = []
     for p, va_dec, vb_dec in rows:
@@ -526,7 +530,7 @@ def list_properties(
     page_size: int = Query(24, ge=1, le=100),
 ):
     q = db.query(Property).join(BankPortfolioMeta).options(
-        joinedload(Property.meta), joinedload(Property.image))
+        joinedload(Property.meta), joinedload(Property.images))
     if neighborhood:
         q = q.filter(Property.neighborhood == neighborhood)
     if bldg_type:
@@ -584,7 +588,7 @@ def export_csv(db: Session = Depends(get_db), user: User = Depends(get_current_u
 @app.get("/api/v1/properties/{pid}")
 def get_property(pid: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     p = db.query(Property).options(joinedload(Property.meta),
-                                   joinedload(Property.image)).get(pid)
+                                   joinedload(Property.images)).get(pid)
     if not p:
         raise HTTPException(404, "Property not found")
     # A manual override has no model backing it; explain against whichever model IS

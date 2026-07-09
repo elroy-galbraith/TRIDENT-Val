@@ -9,7 +9,8 @@
       |AVM - Sale| / Sale > 15%  -> Flagged: High Variance
       8% - 15%                    -> Pending Review
       otherwise                   -> Approved
-- Seeds `property_images` with deterministic Unsplash URLs keyed on structural category.
+- Seeds `property_images` with a deterministic, labeled multi-photo set per property (see
+  `property_image_set`), built from the same curated Unsplash pool keyed on structural category.
 """
 import sys
 from datetime import datetime, timezone
@@ -62,6 +63,13 @@ UNSPLASH = {
     "default": "https://images.unsplash.com/photo-1600047509807-ba8f99d2cdde?w=640&q=70",
 }
 
+# There's no real per-property photography behind this PoC (see module docstring) — just the
+# one curated Unsplash asset per structural category above. To seed a multi-photo carousel
+# with distinct labels per property, every asset's "Exterior Front" cover still uses its own
+# category photo, and the remaining labeled slots deterministically reuse *other* categories'
+# photos in rotation. Still entirely stock/placeholder, just spread across more labeled slots.
+ROOM_LABELS = ["Kitchen", "Living Room", "Primary Bedroom", "Backyard"]
+
 
 def image_category(bldg_type: str, house_style: str) -> str:
     if bldg_type == "1Fam":
@@ -71,6 +79,14 @@ def image_category(bldg_type: str, house_style: str) -> str:
             return "1Fam-2Story"
         return "1Fam-Other"
     return bldg_type if bldg_type in UNSPLASH else "default"
+
+
+def property_image_set(bldg_type: str, house_style: str) -> list[tuple[str, str, str]]:
+    """(label, category, url) for every photo slot on one property, cover first."""
+    cover_cat = image_category(bldg_type, house_style)
+    fillers = [c for c in UNSPLASH if c != cover_cat][:len(ROOM_LABELS)]
+    return [("Exterior Front", cover_cat, UNSPLASH[cover_cat])] + \
+           [(label, cat, UNSPLASH[cat]) for label, cat in zip(ROOM_LABELS, fillers)]
 
 
 def register_models(session) -> str:
@@ -154,7 +170,6 @@ def main() -> None:
         else:
             status = AuditStatus.APPROVED
 
-        cat = image_category(row["bldg_type"], row["house_style"])
         lat, lng = property_latlng(pid, row["neighborhood"])
         session.add(Property(
             pid=pid,
@@ -176,7 +191,10 @@ def main() -> None:
                 underwriter_notes="",
                 resolved_model_id=champion_id,
             ),
-            image=PropertyImage(url=UNSPLASH[cat], category=cat),
+            images=[
+                PropertyImage(url=url, label=label, category=cat, sort_order=i)
+                for i, (label, cat, url) in enumerate(property_image_set(row["bldg_type"], row["house_style"]))
+            ],
         ))
         for mid in model_ids:
             v = valuations_by_model[mid][i]

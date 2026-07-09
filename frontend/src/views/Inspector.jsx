@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { api, pct, usd } from '../api.js'
-import { LtvChip, ModelStatusBadge, Spinner, StatusBadge } from '../components/shared.jsx'
+import { Carousel, LtvChip, ModelStatusBadge, Spinner, StatusBadge } from '../components/shared.jsx'
 import PropertyMap from '../components/PropertyMap.jsx'
 import { logger } from '../logger.js'
 
@@ -146,7 +146,7 @@ export default function Inspector({ pid, onBack, onOpen, user }) {
 
       {/* Header strip */}
       <div className="card p-5 flex flex-wrap gap-6 items-center">
-        <img src={prop.image_url} alt="" className="w-28 h-20 object-cover rounded-sm border border-line"
+        <img src={prop.images?.[0]?.url} alt="" className="w-28 h-20 object-cover rounded-sm border border-line"
           onError={(e) => { e.currentTarget.style.display = 'none' }} />
         <div>
           <div className="label">Asset File</div>
@@ -172,6 +172,13 @@ export default function Inspector({ pid, onBack, onOpen, user }) {
           </div>
         </div>
       </div>
+
+      {prop.images && prop.images.length > 0 && (
+        <div className="card p-5">
+          <div className="label mb-2">Property Photos</div>
+          <Carousel images={prop.images} className="max-w-md" imgClassName="h-64" />
+        </div>
+      )}
 
       <div className="grid lg:grid-cols-3 gap-4 items-start">
         {/* Scenario engine */}
