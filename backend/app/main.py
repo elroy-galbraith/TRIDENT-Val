@@ -123,7 +123,7 @@ def portfolio_map(db: Session = Depends(get_db)):
             "lng": lng,
             "avm_value": float(avm_value),
             "loan_balance": float(loan_balance),
-            "ltv": round(float(loan_balance) / float(avm_value), 4),
+            "ltv": round(float(loan_balance) / float(avm_value), 4) if avm_value else 0.0,
             "audit_status": audit_status.value,
         })
     return {"count": len(points), "points": points}

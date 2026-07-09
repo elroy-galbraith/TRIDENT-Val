@@ -19,7 +19,13 @@ export default function MapView({ onOpen }) {
   const [err, setErr] = useState(null)
   const [statusFilter, setStatusFilter] = useState('')
 
-  useEffect(() => { api.map().then(setData).catch((e) => setErr(e.message)) }, [])
+  useEffect(() => {
+    let active = true
+    api.map()
+      .then((res) => { if (active) setData(res) })
+      .catch((e) => { if (active) setErr(e.message) })
+    return () => { active = false }
+  }, [])
 
   const points = useMemo(() => {
     if (!data) return []
@@ -28,12 +34,16 @@ export default function MapView({ onOpen }) {
 
   const { min, max, totalValue } = useMemo(() => {
     if (!points.length) return { min: 0, max: 0, totalValue: 0 }
-    const values = points.map((p) => p.avm_value)
-    return {
-      min: Math.min(...values),
-      max: Math.max(...values),
-      totalValue: values.reduce((a, b) => a + b, 0),
+    let minVal = Infinity
+    let maxVal = -Infinity
+    let sum = 0
+    for (const p of points) {
+      const val = p.avm_value
+      if (val < minVal) minVal = val
+      if (val > maxVal) maxVal = val
+      sum += val
     }
+    return { min: minVal, max: maxVal, totalValue: sum }
   }, [points])
 
   if (err) return <div className="py-16 text-center text-flag text-sm">Couldn't load portfolio map: {err}</div>
@@ -103,7 +113,7 @@ export default function MapView({ onOpen }) {
                       <span className="figure text-xs" style={{ color: tierColor[tier] }}>LTV {pct(p.ltv)}</span>
                     </div>
                     <button
-                      onClick={() => onOpen(p.pid)}
+                      onClick={(e) => { e.stopPropagation(); onOpen(p.pid) }}
                       className="text-teal hover:underline text-xs pt-1"
                     >
                       Open in Portfolio →
