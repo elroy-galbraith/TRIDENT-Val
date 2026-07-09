@@ -41,6 +41,7 @@ def _db_sink(message):
                 message=record["message"],
                 pid=extra.get("pid"),
                 context=extra.get("context"),
+                actor=extra.get("actor"),
             ))
             db.commit()
         finally:

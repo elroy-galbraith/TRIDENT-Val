@@ -21,6 +21,7 @@ services:
       COPILOT_PROVIDER_BASE_URL: ${COPILOT_PROVIDER_BASE_URL:-https://generativelanguage.googleapis.com/v1beta/openai}
       COPILOT_PROVIDER_API_KEY: ${COPILOT_PROVIDER_API_KEY:-}
       COPILOT_MODEL: ${COPILOT_MODEL:-gemini-2.5-flash}
+      SESSION_SECRET: ${SESSION_SECRET:-}
     depends_on:
       db:
         condition: service_healthy

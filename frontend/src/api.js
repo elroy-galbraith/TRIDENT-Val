@@ -2,6 +2,11 @@ import { logger } from './logger.js'
 
 const BASE = '/api/v1'
 
+// Set by App.jsx so a session that expires mid-use (401 on any call) can bounce
+// the user back to the login screen instead of surfacing a raw fetch error.
+let onUnauthorized = () => {}
+export function setUnauthorizedHandler(fn) { onUnauthorized = fn }
+
 async function get(path) {
   const start = performance.now()
   let r
@@ -13,6 +18,7 @@ async function get(path) {
   }
   const duration_ms = Math.round(performance.now() - start)
   if (!r.ok) {
+    if (r.status === 401) onUnauthorized()
     const body = await r.text()
     logger.error('api', `${path} -> ${r.status} (${duration_ms}ms)`)
     throw new Error(`${r.status} ${body}`)
@@ -34,6 +40,7 @@ async function send(method, path, body, failMessage) {
     throw e
   }
   if (!r.ok) {
+    if (r.status === 401) onUnauthorized()
     logger.error('api', `${method} ${path} -> ${r.status}`)
     throw new Error(failMessage)
   }
@@ -52,6 +59,9 @@ export const api = {
   valuate: (features) => send('POST', '/valuate', { features }, 'valuation failed'),
   updateAudit: (pid, body) => send('PATCH', `/properties/${pid}/audit`, body, 'audit update failed'),
   exportUrl: `${BASE}/properties/export`,
+  login: (username, password) => send('POST', '/auth/login', { username, password }, 'login failed'),
+  logout: () => send('POST', '/auth/logout', {}, 'logout failed'),
+  me: () => get('/auth/me'),
 }
 
 export const usd = (n, digits = 0) =>
