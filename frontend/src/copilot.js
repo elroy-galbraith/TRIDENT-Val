@@ -1,6 +1,35 @@
 import { PageAgent } from 'page-agent'
+import { logger } from './logger.js'
 
 const chartSummaries = {}
+const truncate = (s, n = 400) => (s && s.length > n ? `${s.slice(0, n)}…` : s)
+
+// Mirrors agent.history (steps/observations/retries/errors) into the app's own
+// system_logs ledger via logger.track, so copilot activity is queryable later at
+// GET /api/v1/logs the same way underwriter actions are.
+function logHistoryEvent(event) {
+  switch (event.type) {
+    case 'step': {
+      const { action, reflection } = event
+      logger.track('copilot', `${action.name}: ${truncate(action.output)}`, {
+        input: action.input, next_goal: reflection?.next_goal, memory: reflection?.memory,
+      })
+      break
+    }
+    case 'observation':
+      logger.track('copilot', truncate(event.content))
+      break
+    case 'user_takeover':
+      logger.track('copilot', 'User took over the page mid-task.')
+      break
+    case 'retry':
+      logger.track('copilot', `Retry ${event.attempt}/${event.maxAttempts}: ${truncate(event.message)}`)
+      break
+    case 'error':
+      logger.track('copilot', `Agent error: ${truncate(event.message)}`)
+      break
+  }
+}
 
 export function setChartSummary(key, data) {
   chartSummaries[key] = data
@@ -48,5 +77,12 @@ export function createCopilot() {
     },
   })
   agent.panel.show() // the panel starts hidden until shown; page-agent's own CDN bootstrap does the same
+
+  let loggedCount = 0
+  agent.addEventListener('historychange', () => {
+    for (const event of agent.history.slice(loggedCount)) logHistoryEvent(event)
+    loggedCount = agent.history.length
+  })
+
   return agent
 }

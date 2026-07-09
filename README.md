@@ -69,6 +69,18 @@ unreadable as DOM text; `transformPageContent` in `copilot.js` appends their und
 JSON (LTV distribution, neighborhood concentration) to the agent's context so it can
 answer chart questions without guessing.
 
+**Reopening the widget:** the panel's own "X" button calls `agent.dispose()`, which is
+terminal — a disposed `PageAgent` can't be reused. `App.jsx` tracks this via the agent's
+`dispose` event and shows a "✦ Copilot" button in the header once the widget is closed,
+which spins up a fresh instance.
+
+**Activity log:** every history event (steps, retries, errors) is mirrored into the same
+`system_logs` ledger as the rest of the app via `logger.track('copilot', ...)` — query
+`GET /api/v1/logs?logger=copilot` to see what the agent has done. Note this persists
+reflection/action summaries (not the full page-content payload sent to the LLM, which only
+transits the network), so it's a smaller but real exposure of whatever's on screen when the
+agent acts — worth keeping in mind alongside the audit-ledger fencing above.
+
 ## Architecture
 
 ```
