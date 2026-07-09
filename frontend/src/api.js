@@ -8,6 +8,7 @@ async function get(path) {
 
 export const api = {
   summary: () => get('/portfolio/summary'),
+  map: () => get('/portfolio/map'),
   filters: () => get('/properties/filters'),
   properties: (params) => get(`/properties?${new URLSearchParams(params)}`),
   property: (pid) => get(`/properties/${pid}`),

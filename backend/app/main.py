@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from . import inference
 from .db import get_db
+from .geo import property_latlng
 from .models import AuditStatus, BankPortfolioMeta, Property
 
 app = FastAPI(title="TRIDENT-Val AVM & Risk Triage Engine", version="1.0-poc")
@@ -104,6 +105,28 @@ def portfolio_summary(db: Session = Depends(get_db)):
             {"neighborhood": g[0], "count": g[1], "exposure": float(g[2])} for g in geo
         ],
     }
+
+
+@app.get("/api/v1/portfolio/map")
+def portfolio_map(db: Session = Depends(get_db)):
+    rows = db.query(Property.pid, Property.neighborhood, Property.bldg_type,
+                    BankPortfolioMeta.current_avm_value, BankPortfolioMeta.current_loan_balance,
+                    BankPortfolioMeta.audit_status).join(BankPortfolioMeta).all()
+    points = []
+    for pid, neighborhood, bldg_type, avm_value, loan_balance, audit_status in rows:
+        lat, lng = property_latlng(pid, neighborhood)
+        points.append({
+            "pid": pid,
+            "neighborhood": neighborhood,
+            "bldg_type": bldg_type,
+            "lat": lat,
+            "lng": lng,
+            "avm_value": float(avm_value),
+            "loan_balance": float(loan_balance),
+            "ltv": round(float(loan_balance) / float(avm_value), 4),
+            "audit_status": audit_status.value,
+        })
+    return {"count": len(points), "points": points}
 
 
 @app.get("/api/v1/properties")
