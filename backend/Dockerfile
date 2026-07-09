@@ -8,12 +8,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgomp1 libpango-1.0-0 libpangoft2-1.0-0 libfontconfig1 fonts-liberation \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /srv
-COPY backend/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-COPY backend/app /srv/app
+COPY backend/requirements.txt backend/requirements.txt
+RUN pip install --no-cache-dir -r backend/requirements.txt
+COPY backend /srv/backend
 COPY model /srv/model
 COPY scripts /srv/scripts
 COPY data /srv/data
-ENV PYTHONPATH=/srv:/srv/scripts
+ENV PYTHONPATH=/srv/backend:/srv/scripts
 EXPOSE 8000
 CMD ["sh", "-c", "python scripts/wait_and_seed.py && uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
