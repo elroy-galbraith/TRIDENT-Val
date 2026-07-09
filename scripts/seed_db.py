@@ -184,7 +184,7 @@ def main() -> None:
             lat=lat, lng=lng,
             features=payloads[i],
             meta=BankPortfolioMeta(
-                current_loan_balance=round(ratios[i] * sale, 2),
+                current_loan_balance=round(float(ratios[i]) * sale, 2),
                 current_avm_value=round(avm, 2),
                 avm_variance_pct=round(variance, 4),
                 audit_status=status,
