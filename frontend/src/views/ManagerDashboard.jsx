@@ -3,7 +3,7 @@ import {
   Bar, BarChart, CartesianGrid, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts'
 import { api } from '../api.js'
-import { AssignmentStateBadge, Spinner } from '../components/shared.jsx'
+import { Spinner } from '../components/shared.jsx'
 import { logger } from '../logger.js'
 
 const AGE_BUCKET_COLOR = { '0-3d': '#2E7D4F', '3-7d': '#C77D0A', '7-14d': '#B3352C', '>14d': '#7A1F1F' }
@@ -18,10 +18,17 @@ function Metric({ label, value, accent }) {
   )
 }
 
+// Local date, not new Date().toISOString().slice(0, 10) — that's UTC, which for a user behind
+// UTC can render as tomorrow and default the due-date picker a day ahead of "today".
+function todayLocal() {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
 function AssignForm({ users, onCreated, onCancel }) {
   const [pid, setPid] = useState('')
   const [assignee, setAssignee] = useState(users[0]?.username || '')
-  const [dueDate, setDueDate] = useState(() => new Date().toISOString().slice(0, 10))
+  const [dueDate, setDueDate] = useState(todayLocal)
   const [notes, setNotes] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState(null)
@@ -217,13 +224,11 @@ export default function ManagerDashboard({ onOpen }) {
                       {a.due_date?.slice(0, 10)}{a.overdue ? ' (overdue)' : ''}
                     </td>
                     <td className="py-1.5 pr-3">
-                      {a.state === 'Done' ? <AssignmentStateBadge state={a.state} /> : (
-                        <select value={a.state} onChange={(e) => setItemState(a, e.target.value)}
-                          aria-label={`State for assignment ${a.id}`}
-                          className="border border-line rounded-sm px-1.5 py-1 text-xs bg-white">
-                          {STATE_OPTIONS.map((s) => <option key={s} value={s}>{s}</option>)}
-                        </select>
-                      )}
+                      <select value={a.state} onChange={(e) => setItemState(a, e.target.value)}
+                        aria-label={`State for assignment ${a.id}`}
+                        className="border border-line rounded-sm px-1.5 py-1 text-xs bg-white">
+                        {STATE_OPTIONS.map((s) => <option key={s} value={s}>{s}</option>)}
+                      </select>
                     </td>
                     <td className="py-1.5">{a.created_by || '—'}</td>
                   </tr>

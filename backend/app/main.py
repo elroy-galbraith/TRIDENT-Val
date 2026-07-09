@@ -1085,8 +1085,13 @@ AGING_BUCKETS = [("0-3d", 0.0, 3.0), ("3-7d", 3.0, 7.0), ("7-14d", 7.0, 14.0), (
 
 
 def parse_due_date(raw: str) -> datetime:
+    """A date-only input (e.g. "2026-07-09") means "due sometime that day" — parsed literally
+    that's midnight, which would flag the assignment overdue from the first moment of its own
+    due date. Pin date-only input to the end of that day instead."""
     try:
         d = datetime.fromisoformat(raw)
+        if len(raw) == 10:
+            d = d.replace(hour=23, minute=59, second=59, microsecond=999999)
     except ValueError:
         raise HTTPException(422, "due_date must be an ISO date/datetime string")
     return aware(d)
@@ -1177,16 +1182,24 @@ def list_assignments(
 def update_assignment(assignment_id: int, body: AssignmentUpdateRequest, db: Session = Depends(get_db),
                       user: User = Depends(get_current_user)):
     """The assignee moves their own work Open -> In Progress -> Done; an Admin can also
-    reassign the due date/notes or reopen one. Nobody else may touch it."""
+    reassign the due date/notes or reopen one. Nobody else may touch it — a Viewer never can,
+    even one named as the assignee (e.g. demoted after the assignment was made)."""
     a = db.query(Assignment).get(assignment_id)
     if not a:
         raise HTTPException(404, "Assignment not found")
+    if user.role == UserRole.VIEWER:
+        raise HTTPException(403, "Viewers cannot update assignments")
     if user.role != UserRole.ADMIN and user.username != a.assignee_username:
         raise HTTPException(403, "You can only update your own assignments")
+    if user.role != UserRole.ADMIN and (body.due_date is not None or body.notes is not None):
+        raise HTTPException(403, "Only an Admin can change the due date or notes")
 
     if body.state is not None:
+        if body.state == AssignmentState.DONE and a.state != AssignmentState.DONE:
+            a.completed_at = datetime.now(timezone.utc)  # first transition into Done only
+        elif body.state != AssignmentState.DONE:
+            a.completed_at = None
         a.state = body.state
-        a.completed_at = datetime.now(timezone.utc) if body.state == AssignmentState.DONE else None
     if body.due_date is not None:
         a.due_date = parse_due_date(body.due_date)
     if body.notes is not None:
