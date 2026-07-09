@@ -1020,7 +1020,7 @@ def revaluation_flagged(
         raise HTTPException(404, "Revaluation run not found")
     rows = (db.query(RevaluationResult, Property)
             .join(Property, Property.pid == RevaluationResult.pid)
-            .options(joinedload(Property.meta), joinedload(Property.image))
+            .options(joinedload(Property.meta), joinedload(Property.images))
             .filter(RevaluationResult.run_id == run_id, RevaluationResult.flagged.is_(True))
             .all())
     items = [
