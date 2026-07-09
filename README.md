@@ -193,6 +193,14 @@ unset/absent and the proxy just returns 503; the rest of the app is unaffected.
 | `COPILOT_PROVIDER_API_KEY` | *(empty)* | Provider API key. Unset = the proxy returns 503 and the widget is inert. |
 | `COPILOT_PROVIDER_BASE_URL` | Gemini's OpenAI-compat endpoint | Swap for Anthropic's OpenAI-compatible endpoint, OpenAI itself, etc. |
 | `COPILOT_MODEL` | `gemini-2.5-flash` | Server-controlled — the browser cannot override which model is billed. |
+| `COPILOT_RATE_LIMIT_PER_MINUTE` | `20` | Per-user cap (rolling 60s window) on copilot requests, since the proxy requires a session — see below. |
+
+The copilot proxy also requires an authenticated session (`get_current_user` in
+`backend/app/auth.py`) — an anonymous request gets a 401, so the LLM key and billing are
+never reachable without logging in first. Because that still leaves a logged-in account
+free to hammer the endpoint, `copilot_chat_completions` additionally enforces
+`COPILOT_RATE_LIMIT_PER_MINUTE` per user (in-memory sliding window; fine for this PoC's
+single-process deployment, but a multi-worker deploy would need a shared store instead).
 
 **Guardrails:** the audit status dropdown, underwriter notes field, and "Save audit
 decision" button on the Inspector carry a `data-page-agent-not-interactive` attribute, so
