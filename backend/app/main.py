@@ -587,8 +587,8 @@ def export_csv(db: Session = Depends(get_db), user: User = Depends(get_current_u
 
 @app.get("/api/v1/properties/{pid}")
 def get_property(pid: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    p = db.query(Property).options(joinedload(Property.meta),
-                                   joinedload(Property.images)).get(pid)
+    p = db.query(Property).options(joinedload(Property.meta), joinedload(Property.images)) \
+        .filter(Property.pid == pid).one_or_none()
     if not p:
         raise HTTPException(404, "Property not found")
     # A manual override has no model backing it; explain against whichever model IS

@@ -14,7 +14,7 @@ function Card({ p, onOpen }) {
       <div className="relative">
         <img
           src={p.images?.[0]?.url || FALLBACK_IMG}
-          onError={(e) => { e.currentTarget.src = FALLBACK_IMG }}
+          onError={(e) => { e.currentTarget.onerror = null; e.currentTarget.src = FALLBACK_IMG }}
           alt={`${p.bldg_type} in ${p.neighborhood}`}
           className="w-full h-40 object-cover"
           loading="lazy"

@@ -168,7 +168,8 @@ def _valuation_date(db: Session, pid: int, resolved_model_id: Optional[str],
 # ---------- per-asset decision report ----------
 
 def asset_report_context(db: Session, pid: int, exported_by: User) -> Optional[dict]:
-    prop = db.query(Property).options(joinedload(Property.meta), joinedload(Property.images)).get(pid)
+    prop = db.query(Property).options(joinedload(Property.meta), joinedload(Property.images)) \
+        .filter(Property.pid == pid).one_or_none()
     if not prop or not prop.meta:
         return None
     meta = prop.meta

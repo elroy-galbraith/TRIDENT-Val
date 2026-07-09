@@ -69,7 +69,7 @@ export function Carousel({ images, className = '', imgClassName = 'h-64' }) {
           key={img.url}
           src={img.url}
           alt={img.label || ''}
-          onError={(e) => { e.currentTarget.src = FALLBACK_IMG }}
+          onError={(e) => { e.currentTarget.onerror = null; e.currentTarget.src = FALLBACK_IMG }}
           className={`w-full ${imgClassName} object-cover rounded-sm border border-line`}
         />
         {list.length > 1 && (

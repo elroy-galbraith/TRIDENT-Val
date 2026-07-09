@@ -146,8 +146,10 @@ export default function Inspector({ pid, onBack, onOpen, user }) {
 
       {/* Header strip */}
       <div className="card p-5 flex flex-wrap gap-6 items-center">
-        <img src={prop.images?.[0]?.url} alt="" className="w-28 h-20 object-cover rounded-sm border border-line"
-          onError={(e) => { e.currentTarget.style.display = 'none' }} />
+        {prop.images?.[0]?.url && (
+          <img src={prop.images[0].url} alt="" className="w-28 h-20 object-cover rounded-sm border border-line"
+            onError={(e) => { e.currentTarget.style.display = 'none' }} />
+        )}
         <div>
           <div className="label">Asset File</div>
           <div className="text-lg font-semibold">{prop.neighborhood} · {prop.bldg_type} · {prop.house_style}</div>
