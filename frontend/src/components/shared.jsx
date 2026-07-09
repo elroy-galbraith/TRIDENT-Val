@@ -32,6 +32,20 @@ export function ModelStatusBadge({ status }) {
   )
 }
 
+const assignmentStateStyle = {
+  'Open': 'bg-inkmute/10 text-inkmute border-inkmute/30',
+  'In Progress': 'bg-amber/10 text-amber border-amber/30',
+  'Done': 'bg-ok/10 text-ok border-ok/30',
+}
+
+export function AssignmentStateBadge({ state }) {
+  return (
+    <span className={`inline-block px-2 py-0.5 text-[11px] font-medium border rounded-sm ${assignmentStateStyle[state] || ''}`}>
+      {state}
+    </span>
+  )
+}
+
 export function LtvChip({ ltv }) {
   const tier = ltvTier(ltv)
   return (

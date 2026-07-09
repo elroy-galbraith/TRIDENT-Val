@@ -24,9 +24,9 @@ from . import inference, reports
 from .auth import DUMMY_PASSWORD_HASH, get_current_user, require_role, verify_password
 from .db import Base, engine, get_db
 from .logging_config import setup_logging
-from .models import (AuditStatus, BankPortfolioMeta, ModelStatus, ModelValuation,
-                     Property, PropertyImage, RegisteredModel, RevaluationResult,
-                     RevaluationRun, ScenarioType, SystemLog, User, UserRole)
+from .models import (Assignment, AssignmentState, AuditStatus, BankPortfolioMeta, ModelStatus,
+                     ModelValuation, Property, PropertyImage, RegisteredModel,
+                     RevaluationResult, RevaluationRun, ScenarioType, SystemLog, User, UserRole)
 
 setup_logging()
 
@@ -122,6 +122,19 @@ class TriageDecisionRequest(BaseModel):
     model_id: Optional[str] = Field(None, description="Required when decision == 'challenger'")
     manual_value: Optional[float] = Field(None, gt=0, description="Required when decision == 'manual'")
     rationale: str = Field(..., min_length=1)
+
+
+class AssignmentCreateRequest(BaseModel):
+    pid: int
+    assignee_username: str
+    due_date: str = Field(..., description="ISO date/datetime")
+    notes: Optional[str] = ""
+
+
+class AssignmentUpdateRequest(BaseModel):
+    state: Optional[AssignmentState] = None
+    due_date: Optional[str] = Field(None, description="ISO date/datetime")
+    notes: Optional[str] = None
 
 
 class RevaluationRequest(BaseModel):
@@ -1060,6 +1073,196 @@ def revaluation_report(run_id: int, db: Session = Depends(get_db), user: User = 
     return Response(
         content=pdf_bytes, media_type="application/pdf",
         headers={"Content-Disposition": f'inline; filename="trident-val_revaluation_cycle_{run_id}.pdf"'})
+
+
+# ---------- work management (assignments) ----------
+# Thin layer on top of the audit/triage lifecycle: who owns getting a given asset resolved,
+# and by when. An Admin (the manager role in this PoC's RBAC) assigns; the assignee works
+# their own queue. Deliberately not a workflow engine: no notifications, comments, or
+# escalation rules — just state plus the manager rollup below.
+
+AGING_BUCKETS = [("0-3d", 0.0, 3.0), ("3-7d", 3.0, 7.0), ("7-14d", 7.0, 14.0), (">14d", 14.0, float("inf"))]
+
+
+def parse_due_date(raw: str) -> datetime:
+    """A date-only input (e.g. "2026-07-09") means "due sometime that day" — parsed literally
+    that's midnight, which would flag the assignment overdue from the first moment of its own
+    due date. Pin date-only input to the end of that day instead."""
+    try:
+        d = datetime.fromisoformat(raw)
+        if len(raw) == 10:
+            d = d.replace(hour=23, minute=59, second=59, microsecond=999999)
+    except ValueError:
+        raise HTTPException(422, "due_date must be an ISO date/datetime string")
+    return aware(d)
+
+
+def aware(d: datetime) -> datetime:
+    """SQLite (unlike Postgres) drops tzinfo on DateTime(timezone=True) columns on read-back,
+    so a value this app always wrote as UTC can come back naive — normalize before comparing
+    against a fresh (aware) datetime.now(timezone.utc)."""
+    return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
+
+
+def assignment_out(a: Assignment, neighborhood: Optional[str] = None) -> dict:
+    now = datetime.now(timezone.utc)
+    return {
+        "id": a.id, "pid": a.pid, "neighborhood": neighborhood,
+        "assignee_username": a.assignee_username, "state": a.state.value,
+        "due_date": a.due_date.isoformat() if a.due_date else None,
+        "notes": a.notes, "created_by": a.created_by,
+        "created_at": a.created_at.isoformat() if a.created_at else None,
+        "completed_at": a.completed_at.isoformat() if a.completed_at else None,
+        "overdue": bool(a.state != AssignmentState.DONE and a.due_date and aware(a.due_date) < now),
+    }
+
+
+@app.get("/api/v1/users")
+def list_users(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """Assignable users, for populating an assignee picker. Usernames/roles aren't sensitive —
+    already visible via the actor field on every audit log entry."""
+    users = db.query(User).filter(User.role != UserRole.VIEWER).order_by(User.username).all()
+    return {"items": [user_out(u) for u in users]}
+
+
+@app.post("/api/v1/assignments")
+def create_assignment(body: AssignmentCreateRequest, db: Session = Depends(get_db),
+                      user: User = Depends(require_role(UserRole.ADMIN))):
+    """Assign a property to an underwriter (or another admin), due by a given date. Gated to
+    Admin only — assigning work is a manager act, distinct from the Underwriter/Admin-gated
+    audit actions the assignee will actually go perform."""
+    if not db.query(Property.pid).filter(Property.pid == body.pid).scalar():
+        raise HTTPException(404, "Property not found")
+    assignee = db.query(User).filter(User.username == body.assignee_username).one_or_none()
+    if not assignee:
+        raise HTTPException(422, f"Unknown user {body.assignee_username!r}")
+    if assignee.role == UserRole.VIEWER:
+        raise HTTPException(422, "Cannot assign work to a Viewer")
+
+    a = Assignment(pid=body.pid, assignee_username=assignee.username,
+                   due_date=parse_due_date(body.due_date), notes=body.notes or "",
+                   created_by=user.username)
+    db.add(a)
+    db.commit()
+
+    logger.bind(actor=user.username, pid=body.pid, context={
+        "assignment_id": a.id, "assignee": assignee.username, "due_date": a.due_date.isoformat(),
+    }).info("Assigned PID {pid} to {assignee}, due {due}.",
+           pid=body.pid, assignee=assignee.username, due=a.due_date.date())
+    neighborhood = db.query(Property.neighborhood).filter(Property.pid == a.pid).scalar()
+    return assignment_out(a, neighborhood)
+
+
+@app.get("/api/v1/assignments")
+def list_assignments(
+    assignee_username: Optional[str] = None, state: Optional[AssignmentState] = None,
+    pid: Optional[int] = None, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """A non-admin only ever sees their own queue: an explicit assignee filter that names
+    someone else is rejected rather than silently ignored, and an absent filter defaults to
+    "mine". An Admin can filter by any assignee, or omit it to see everyone's."""
+    if user.role != UserRole.ADMIN:
+        if assignee_username and assignee_username != user.username:
+            raise HTTPException(403, "You can only view your own assignments")
+        assignee_username = user.username
+
+    q = db.query(Assignment, Property.neighborhood).join(Property, Property.pid == Assignment.pid)
+    if assignee_username:
+        q = q.filter(Assignment.assignee_username == assignee_username)
+    if state:
+        q = q.filter(Assignment.state == state)
+    if pid:
+        q = q.filter(Assignment.pid == pid)
+    rows = q.order_by(Assignment.due_date).all()
+    return {"items": [assignment_out(a, n) for a, n in rows]}
+
+
+@app.patch("/api/v1/assignments/{assignment_id}")
+def update_assignment(assignment_id: int, body: AssignmentUpdateRequest, db: Session = Depends(get_db),
+                      user: User = Depends(get_current_user)):
+    """The assignee moves their own work Open -> In Progress -> Done; an Admin can also
+    reassign the due date/notes or reopen one. Nobody else may touch it — a Viewer never can,
+    even one named as the assignee (e.g. demoted after the assignment was made)."""
+    a = db.query(Assignment).get(assignment_id)
+    if not a:
+        raise HTTPException(404, "Assignment not found")
+    if user.role == UserRole.VIEWER:
+        raise HTTPException(403, "Viewers cannot update assignments")
+    if user.role != UserRole.ADMIN and user.username != a.assignee_username:
+        raise HTTPException(403, "You can only update your own assignments")
+    if user.role != UserRole.ADMIN and (body.due_date is not None or body.notes is not None):
+        raise HTTPException(403, "Only an Admin can change the due date or notes")
+
+    if body.state is not None:
+        if body.state == AssignmentState.DONE and a.state != AssignmentState.DONE:
+            a.completed_at = datetime.now(timezone.utc)  # first transition into Done only
+        elif body.state != AssignmentState.DONE:
+            a.completed_at = None
+        a.state = body.state
+    if body.due_date is not None:
+        a.due_date = parse_due_date(body.due_date)
+    if body.notes is not None:
+        a.notes = body.notes
+    db.commit()
+
+    logger.bind(actor=user.username, pid=a.pid, context={
+        "assignment_id": a.id, "state": a.state.value,
+    }).info("Assignment #{id} for PID {pid} updated -> {state}.",
+           id=a.id, pid=a.pid, state=a.state.value)
+    neighborhood = db.query(Property.neighborhood).filter(Property.pid == a.pid).scalar()
+    return assignment_out(a, neighborhood)
+
+
+@app.get("/api/v1/assignments/summary")
+def assignments_summary(db: Session = Depends(get_db),
+                        user: User = Depends(require_role(UserRole.ADMIN))):
+    """Manager view: queue depth and aging per assignee, plus portfolio-wide completion — the
+    rollup that makes a manager lean in without building a workflow engine underneath it."""
+    now = datetime.now(timezone.utc)
+    rows = db.query(Assignment).all()
+
+    by_assignee = {}
+    for a in rows:
+        b = by_assignee.setdefault(a.assignee_username, {
+            "assignee": a.assignee_username, "open": 0, "in_progress": 0, "done": 0,
+            "overdue": 0, "age_total_days": 0.0, "age_n": 0,
+        })
+        if a.state == AssignmentState.OPEN:
+            b["open"] += 1
+        elif a.state == AssignmentState.IN_PROGRESS:
+            b["in_progress"] += 1
+        else:
+            b["done"] += 1
+        if a.state != AssignmentState.DONE:
+            b["age_total_days"] += (now - aware(a.created_at)).total_seconds() / 86400 if a.created_at else 0.0
+            b["age_n"] += 1
+            if a.due_date and aware(a.due_date) < now:
+                b["overdue"] += 1
+
+    by_assignee_out = [
+        {"assignee": b["assignee"], "open": b["open"], "in_progress": b["in_progress"],
+         "done": b["done"], "overdue": b["overdue"],
+         "avg_age_days": round(b["age_total_days"] / b["age_n"], 1) if b["age_n"] else 0.0}
+        for b in sorted(by_assignee.values(), key=lambda b: -(b["open"] + b["in_progress"]))
+    ]
+
+    open_rows = [a for a in rows if a.state != AssignmentState.DONE]
+    aging_buckets = [
+        {"bucket": name, "count": sum(
+            1 for a in open_rows
+            if lo <= ((now - aware(a.created_at)).total_seconds() / 86400 if a.created_at else 0.0) < hi)}
+        for name, lo, hi in AGING_BUCKETS
+    ]
+
+    return {
+        "total_open": sum(1 for a in rows if a.state == AssignmentState.OPEN),
+        "total_in_progress": sum(1 for a in rows if a.state == AssignmentState.IN_PROGRESS),
+        "total_done": sum(1 for a in rows if a.state == AssignmentState.DONE),
+        "overdue_count": sum(b["overdue"] for b in by_assignee.values()),
+        "by_assignee": by_assignee_out,
+        "aging_buckets": aging_buckets,
+    }
 
 
 # ---------- AI copilot proxy ----------

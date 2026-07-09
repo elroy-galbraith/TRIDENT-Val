@@ -208,6 +208,33 @@ class RevaluationResult(Base):
     prop = relationship("Property")
 
 
+class AssignmentState(str, enum.Enum):
+    OPEN = "Open"
+    IN_PROGRESS = "In Progress"
+    DONE = "Done"
+
+
+class Assignment(Base):
+    """Thin work-management layer on top of the audit/triage lifecycle: who owns getting a
+    given asset resolved, and by when. Deliberately just state (not a workflow engine) — no
+    notifications, comments, or escalation rules; see app.main's manager rollup for the
+    queue-depth/aging/completion view this exists to feed."""
+    __tablename__ = "assignments"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    pid = Column(BigInteger, ForeignKey("properties.pid"), index=True, nullable=False)
+    assignee_username = Column(String(64), ForeignKey("users.username"), index=True, nullable=False)
+    state = Column(Enum(AssignmentState, values_callable=lambda e: [m.value for m in e]),
+                   default=AssignmentState.OPEN, index=True, nullable=False)
+    due_date = Column(DateTime(timezone=True), nullable=False)
+    notes = Column(Text, default="")
+    created_by = Column(String(64), nullable=True)  # actor username
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+
+    prop = relationship("Property")
+
+
 class ModelValuation(Base):
     """Shadow-scoring ledger: one row per (property, model) — every registered model's
     valuation for every asset, computed at seed/registration time. This is the source of

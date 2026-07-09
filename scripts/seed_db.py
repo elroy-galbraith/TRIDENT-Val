@@ -13,7 +13,7 @@
   `property_image_set`), built from the same curated Unsplash pool keyed on structural category.
 """
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import numpy as np
@@ -25,9 +25,9 @@ sys.path.insert(0, str(ROOT / "backend"))
 from app.auth import hash_password  # noqa: E402
 from app.db import Base, SessionLocal, engine  # noqa: E402
 from app.geo import property_latlng  # noqa: E402
-from app.models import (AuditStatus, BankPortfolioMeta, ModelStatus,  # noqa: E402
-                        ModelValuation, Property, PropertyImage, RegisteredModel,
-                        User, UserRole)
+from app.models import (Assignment, AssignmentState, AuditStatus, BankPortfolioMeta,  # noqa: E402
+                        ModelStatus, ModelValuation, Property, PropertyImage,
+                        RegisteredModel, User, UserRole)
 from app import inference  # noqa: E402
 from train_model import CATEGORICAL, FEATURES, NUMERIC, ORDINAL, load_frame  # noqa: E402
 
@@ -35,9 +35,12 @@ FLAG_HI, FLAG_LO = 0.15, 0.08
 
 # PoC-only fixed demo credentials — not secrets. Do not reuse these anywhere,
 # and don't expose this app beyond a trusted local/demo network with defaults intact.
+# Two underwriters so the work-management manager dashboard has more than one person's
+# queue to show depth/aging across.
 DEMO_USERS = [
     ("viewer", "viewer123", UserRole.VIEWER),
     ("underwriter", "underwriter123", UserRole.UNDERWRITER),
+    ("underwriter2", "underwriter123", UserRole.UNDERWRITER),
     ("admin", "admin123", UserRole.ADMIN),
 ]
 
@@ -131,6 +134,46 @@ def register_models(session) -> str:
     return champion_id
 
 
+def seed_assignments(session) -> None:
+    """A handful of demo work assignments across the two underwriters, with staggered ages
+    and due dates, so the manager dashboard (queue depth, aging, completion) has something
+    to show right after a fresh seed rather than an empty state."""
+    pids = [pid for (pid,) in (
+        session.query(Property.pid)
+        .join(BankPortfolioMeta, BankPortfolioMeta.pid == Property.pid)
+        .filter(BankPortfolioMeta.audit_status != AuditStatus.APPROVED)
+        .order_by(Property.pid)
+        .limit(10).all()
+    )]
+    if not pids:
+        return
+
+    now = datetime.now(timezone.utc)
+    # (age in days since assigned, state, due date offset in days from now, assignee)
+    plan = [
+        (1, AssignmentState.OPEN, 5, "underwriter"),
+        (2, AssignmentState.IN_PROGRESS, 2, "underwriter2"),
+        (5, AssignmentState.OPEN, -1, "underwriter"),
+        (6, AssignmentState.IN_PROGRESS, 3, "underwriter2"),
+        (9, AssignmentState.OPEN, -3, "underwriter"),
+        (10, AssignmentState.IN_PROGRESS, 1, "underwriter2"),
+        (15, AssignmentState.OPEN, -8, "underwriter"),
+        (3, AssignmentState.DONE, -1, "underwriter2"),
+        (7, AssignmentState.DONE, -2, "underwriter"),
+        (12, AssignmentState.IN_PROGRESS, 4, "underwriter2"),
+    ]
+    for pid, (age_days, state, due_offset, assignee) in zip(pids, plan):
+        created_at = now - timedelta(days=age_days)
+        session.add(Assignment(
+            pid=pid, assignee_username=assignee, state=state,
+            due_date=now + timedelta(days=due_offset), notes="", created_by="admin",
+            created_at=created_at,
+            completed_at=created_at + timedelta(days=1) if state == AssignmentState.DONE else None,
+        ))
+    session.commit()
+    print(f"Seeded {len(pids)} demo assignments across underwriter/underwriter2.")
+
+
 def main() -> None:
     Base.metadata.drop_all(engine)
     Base.metadata.create_all(engine)
@@ -209,6 +252,8 @@ def main() -> None:
     counts = {s.value: session.query(BankPortfolioMeta).filter(
         BankPortfolioMeta.audit_status == s).count() for s in AuditStatus}
     print(f"Seeded {len(df)} properties. Audit triage: {counts}")
+
+    seed_assignments(session)
     session.close()
 
 
