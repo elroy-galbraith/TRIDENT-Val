@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, StreamingResponse
 from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import func, or_
+from sqlalchemy import String, cast, func, or_
 from sqlalchemy.orm import Session, joinedload
 
 load_dotenv()  # picks up a repo-root .env for local (non-Docker) runs; no-op if absent
@@ -204,7 +204,7 @@ def list_properties(
         q = q.filter(BankPortfolioMeta.audit_status == audit_status)
     if search:
         q = q.filter(or_(Property.neighborhood.ilike(f"%{search}%"),
-                         func.cast(Property.pid, str).like(f"%{search}%")))
+                         cast(Property.pid, String).like(f"%{search}%")))
 
     order = {
         "ltv_desc": (BankPortfolioMeta.current_loan_balance /
