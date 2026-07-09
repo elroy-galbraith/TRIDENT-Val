@@ -325,24 +325,40 @@ def update_audit(pid: int, body: AuditUpdate, db: Session = Depends(get_db)):
 # ---------- AI copilot proxy ----------
 # page-agent (frontend) speaks the OpenAI chat-completions schema. This proxy keeps the
 # real LLM API key server-side and lets us pin/swap the model without a frontend change.
+# page-agent's OpenAI client never sets `stream`, so this proxy is intentionally non-streaming.
 COPILOT_PROVIDER_BASE_URL = os.environ.get(
     "COPILOT_PROVIDER_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai")
 COPILOT_PROVIDER_API_KEY = os.environ.get("COPILOT_PROVIDER_API_KEY", "")
 COPILOT_MODEL = os.environ.get("COPILOT_MODEL", "gemini-2.5-flash")
+copilot_http_client = httpx.AsyncClient(timeout=60)
+
+
+@app.on_event("shutdown")
+async def close_copilot_http_client():
+    await copilot_http_client.aclose()
 
 
 @app.post("/api/v1/copilot/chat/completions")
 async def copilot_chat_completions(request: Request):
     if not COPILOT_PROVIDER_API_KEY:
         raise HTTPException(503, "Copilot is not configured: set COPILOT_PROVIDER_API_KEY")
-    body = await request.json()
+    try:
+        body = await request.json()
+    except ValueError:
+        raise HTTPException(400, "Invalid JSON body")
+    if not isinstance(body, dict):
+        raise HTTPException(400, "Request body must be a JSON object")
     body["model"] = COPILOT_MODEL  # the browser never chooses the model or sees the key
-    async with httpx.AsyncClient(timeout=60) as client:
-        upstream = await client.post(
+    try:
+        upstream = await copilot_http_client.post(
             f"{COPILOT_PROVIDER_BASE_URL}/chat/completions",
             json=body,
             headers={"Authorization": f"Bearer {COPILOT_PROVIDER_API_KEY}"},
         )
+    except httpx.TimeoutException:
+        raise HTTPException(504, "Upstream LLM provider timed out")
+    except httpx.HTTPError as e:
+        raise HTTPException(502, f"Upstream LLM provider error: {e}")
     return Response(content=upstream.content, status_code=upstream.status_code,
                     media_type=upstream.headers.get("content-type", "application/json"))
 
