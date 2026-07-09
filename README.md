@@ -94,8 +94,9 @@ Deliberately not built in this pass, so it's easy to pick up without re-deriving
 - Per-property or per-neighborhood row-level permissions (today's gating is per-action:
   read vs. write-audit vs. read-ledger)
 - Rate limiting / lockout on failed logins
-- HTTPS/secure-cookie enforcement (the session cookie is `https_only=False`, appropriate
-  for local/demo `http://localhost` only)
+- Automatic HTTPS enforcement (no redirect/HSTS). The session cookie's `Secure` flag is
+  configurable via `SESSION_COOKIE_SECURE` (defaults to `false`, appropriate for
+  local/demo `http://localhost`) but nothing forces the connection itself onto HTTPS
 - Alembic (or any) migration tooling — schema changes still require a full reseed
 - Server-side session revocation before expiry (the signed cookie can only be
   invalidated early by rotating `SESSION_SECRET` for everyone)

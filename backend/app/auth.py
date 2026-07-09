@@ -26,6 +26,13 @@ def verify_password(plain: str, password_hash: str) -> bool:
         return False  # malformed hash — fail closed, not a crash
 
 
+# Computed once at import time so a login attempt for a nonexistent username still pays
+# the same bcrypt cost as a real password check. Without this, "user not found" returns
+# measurably faster than "wrong password" (which calls verify_password), letting an
+# attacker enumerate valid usernames purely by timing the login response.
+DUMMY_PASSWORD_HASH = hash_password("not-a-real-account-used-only-to-equalize-login-timing")
+
+
 def get_current_user(request: Request, db: Session = Depends(get_db)) -> User:
     """Resolve the session cookie to a live User row. 401s if there's no
     session, or the session references a user that no longer exists (e.g. a

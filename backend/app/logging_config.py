@@ -44,6 +44,9 @@ def _db_sink(message):
                 actor=extra.get("actor"),
             ))
             db.commit()
+        except Exception:
+            db.rollback()
+            raise
         finally:
             db.close()
     except Exception:

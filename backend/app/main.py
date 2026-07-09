@@ -19,7 +19,7 @@ from starlette.middleware.sessions import SessionMiddleware
 load_dotenv()  # picks up a repo-root .env for local (non-Docker) runs; no-op if absent
 
 from . import inference
-from .auth import get_current_user, require_role, verify_password
+from .auth import DUMMY_PASSWORD_HASH, get_current_user, require_role, verify_password
 from .db import Base, engine, get_db
 from .logging_config import setup_logging
 from .models import AuditStatus, BankPortfolioMeta, Property, SystemLog, User, UserRole
@@ -38,8 +38,11 @@ SESSION_SECRET = os.environ.get("SESSION_SECRET") or "trident-poc-insecure-defau
 if not os.environ.get("SESSION_SECRET"):
     logger.warning("SESSION_SECRET is not set; using an insecure PoC-only default. "
                    "Set SESSION_SECRET before any non-local use.")
+# Defaults to False so the cookie still works over plain http://localhost; flip to true
+# once this sits behind real HTTPS so the browser refuses to send the cookie over http.
+SESSION_COOKIE_SECURE = os.environ.get("SESSION_COOKIE_SECURE", "false").lower() == "true"
 app.add_middleware(SessionMiddleware, secret_key=SESSION_SECRET, max_age=60 * 60 * 8,
-                   https_only=False)
+                   https_only=SESSION_COOKIE_SECURE)
 
 
 @app.on_event("startup")
@@ -156,7 +159,13 @@ def health():
 @app.post("/api/v1/auth/login")
 def login(body: LoginRequest, request: Request, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.username == body.username).first()
-    if user is None or not verify_password(body.password, user.password_hash):
+    # `password_ok` must be computed unconditionally, outside the `if` below — `or` would
+    # short-circuit and skip verify_password entirely when user is None, making "user not
+    # found" respond faster than "wrong password" and leaking which usernames exist via
+    # response timing. Checking against a dummy hash keeps both paths equally slow.
+    password_hash = user.password_hash if user else DUMMY_PASSWORD_HASH
+    password_ok = verify_password(body.password, password_hash)
+    if user is None or not password_ok:
         logger.bind(context={"attempted_username": body.username}).warning(
             "Failed login attempt for username '{username}'.", username=body.username)
         raise HTTPException(401, "Invalid username or password")
@@ -498,15 +507,21 @@ VALID_LOG_LEVELS = {"TRACE", "DEBUG", "INFO", "SUCCESS", "WARNING", "ERROR", "CR
 LEVEL_ALIASES = {"TRACE": "DEBUG", "WARN": "WARNING"}
 
 
+CLIENT_LOG_BATCH_LIMIT = 50
+
+
 @app.post("/api/v1/logs/client", status_code=204)
 def log_client_event(entries: list[ClientLogEntry], request: Request):
     """Ingest a batch of frontend (loglevel) log entries into the shared ledger.
 
     Deliberately left open (no login required) — this is the endpoint through which
     the frontend reports its own errors, including pre-login and 401s themselves;
-    gating it risks a 401-reporting-a-401 loop. `actor` is attached opportunistically
-    from the session when one exists, never required, and never trusts a client-supplied
-    value (ClientLogEntry has no actor field at all)."""
+    gating it risks a 401-reporting-a-401 loop. Since it's unauthenticated, batch size
+    is capped so it can't be used to flood system_logs with unbounded writes. `actor` is
+    attached opportunistically from the session when one exists, never required, and
+    never trusts a client-supplied value (ClientLogEntry has no actor field at all)."""
+    if len(entries) > CLIENT_LOG_BATCH_LIMIT:
+        raise HTTPException(400, f"Batch exceeds the {CLIENT_LOG_BATCH_LIMIT}-entry limit per request.")
     actor = request.session.get("username")
     for e in entries:
         raw = e.level.upper()
