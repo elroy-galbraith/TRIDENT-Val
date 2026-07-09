@@ -203,8 +203,11 @@ def list_properties(
     if audit_status:
         q = q.filter(BankPortfolioMeta.audit_status == audit_status)
     if search:
-        q = q.filter(or_(Property.neighborhood.ilike(f"%{search}%"),
-                         cast(Property.pid, String).like(f"%{search}%")))
+        if search.isdigit():
+            q = q.filter(or_(Property.neighborhood.ilike(f"%{search}%"),
+                             cast(Property.pid, String).like(f"%{search}%")))
+        else:
+            q = q.filter(Property.neighborhood.ilike(f"%{search}%"))
 
     order = {
         "ltv_desc": (BankPortfolioMeta.current_loan_balance /
