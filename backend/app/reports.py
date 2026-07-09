@@ -168,7 +168,8 @@ def _valuation_date(db: Session, pid: int, resolved_model_id: Optional[str],
 # ---------- per-asset decision report ----------
 
 def asset_report_context(db: Session, pid: int, exported_by: User) -> Optional[dict]:
-    prop = db.query(Property).options(joinedload(Property.meta)).get(pid)
+    prop = db.query(Property).options(joinedload(Property.meta), joinedload(Property.images)) \
+        .filter(Property.pid == pid).one_or_none()
     if not prop or not prop.meta:
         return None
     meta = prop.meta
@@ -230,7 +231,7 @@ def asset_report_context(db: Session, pid: int, exported_by: User) -> Optional[d
     drafted = narrative.draft_asset_narrative(llm_payload, pid)
 
     return {
-        "pid": pid, "prop": prop, "meta": meta,
+        "pid": pid, "prop": prop, "meta": meta, "images": prop.images,
         "asset_label": f"{prop.neighborhood} · {prop.bldg_type} · {prop.house_style}",
         "total_sqft": (prop.gr_liv_area or 0) + (prop.total_bsmt_sf or 0),
         "effective_model": effective_model,

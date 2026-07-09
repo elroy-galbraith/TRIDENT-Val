@@ -44,8 +44,8 @@ class Property(Base):
 
     meta = relationship("BankPortfolioMeta", back_populates="prop", uselist=False,
                         cascade="all, delete-orphan")
-    image = relationship("PropertyImage", back_populates="prop", uselist=False,
-                         cascade="all, delete-orphan")
+    images = relationship("PropertyImage", back_populates="prop", order_by="PropertyImage.sort_order",
+                          cascade="all, delete-orphan")
 
 
 class BankPortfolioMeta(Base):
@@ -73,11 +73,14 @@ class BankPortfolioMeta(Base):
 class PropertyImage(Base):
     __tablename__ = "property_images"
 
-    pid = Column(BigInteger, ForeignKey("properties.pid"), primary_key=True)
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    pid = Column(BigInteger, ForeignKey("properties.pid"), index=True, nullable=False)
     url = Column(String(512), nullable=False)
+    label = Column(String(64))     # human-readable caption, e.g. "Kitchen", "Exterior Front"
     category = Column(String(32))  # structural category driving the deterministic mapping
+    sort_order = Column(Integer, default=0, nullable=False)  # display order within the carousel
 
-    prop = relationship("Property", back_populates="image")
+    prop = relationship("Property", back_populates="images")
 
 
 class SystemLog(Base):
