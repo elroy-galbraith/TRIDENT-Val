@@ -20,11 +20,10 @@
 **/venv/
 **/*.egg-info/
 
-# Node (irrelevant to the backend image, but the repo-root context would
-# otherwise ship it on every backend build too)
+# Node / Frontend (completely irrelevant to the backend image — excluding the
+# whole tree means backend builds never even hash the frontend source)
+frontend/
 **/node_modules/
-frontend/dist/
-frontend/.vite/
 
 # Local runtime artifacts / secrets
 **/.env

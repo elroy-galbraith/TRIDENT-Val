@@ -45,9 +45,13 @@ accumulated build cache and dangling layers from repeated `--build` runs. Reclai
 with:
 
 ```bash
-docker builder prune -af      # build cache only
-docker system prune -af --volumes   # + unused images/containers/volumes (also drops pgdata — reseed after)
+docker builder prune -af   # build cache only
+docker system prune -af    # + unused images/containers (does NOT drop volumes)
+docker compose down -v     # also drop this project's own database volume (reseed after)
 ```
+
+Avoid adding `--volumes` to `docker system prune` — it drops *every* unused volume on
+the host, not just this project's, which can silently wipe other projects' data too.
 
 If it recurs, raise the disk image size in Docker Desktop under Settings → Resources →
 Advanced. The repo ships `.dockerignore` files (root + `frontend/`) so local-only
