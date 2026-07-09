@@ -135,6 +135,21 @@ def model_spec():
     return inference.get_spec()
 
 
+_importance_cache: Optional[dict] = None
+
+
+@app.get("/api/v1/model/importance")
+def model_importance(db: Session = Depends(get_db)):
+    """Global feature importance for the Model Card page, cached after the first request —
+    property feature vectors are immutable after seeding, so re-scoring the whole portfolio
+    on every page load would be wasted work."""
+    global _importance_cache
+    if _importance_cache is None:
+        rows = db.query(Property.features).all()
+        _importance_cache = inference.global_importance([r[0] for r in rows])
+    return _importance_cache
+
+
 @app.get("/api/v1/portfolio/summary")
 def portfolio_summary(db: Session = Depends(get_db)):
     exposure, valuation, n = db.query(
