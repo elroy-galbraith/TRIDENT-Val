@@ -10,14 +10,16 @@ import { setChartSummary } from '../copilot.js'
 // (MAPE, R², SHAP, holdout) explained in place instead of assuming the reader already knows it.
 function Term({ define, children }) {
   const [open, setOpen] = useState(false)
+  const id = React.useId()
   return (
     <span className="relative inline-block">
       <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open}
+        aria-describedby={open ? id : undefined}
         className="underline decoration-dotted decoration-inkmute underline-offset-2 text-tealdeep font-medium">
         {children}
       </button>
       {open && (
-        <span role="tooltip"
+        <span role="tooltip" id={id}
           className="absolute z-10 left-0 top-full mt-1 w-64 text-xs leading-relaxed bg-ink text-white rounded-sm p-2.5 shadow-lg">
           {define}
         </span>
@@ -54,13 +56,16 @@ export default function ModelCard({ onBrowse }) {
   const [selected, setSelected] = useState(null)
 
   useEffect(() => {
+    let active = true
     Promise.all([api.spec(), api.summary(), api.importance()])
       .then(([s, sm, imp]) => {
+        if (!active) return
         setSpec(s); setSummary(sm); setImportance(imp)
         setSelected(imp.drivers[0]?.feature ?? null)
         setChartSummary('model_global_importance', imp.drivers)
       })
-      .catch((e) => setErr(e.message))
+      .catch((e) => { if (active) setErr(e.message) })
+    return () => { active = false }
   }, [])
 
   if (err) return <div className="py-16 text-center text-flag text-sm">Couldn't load the model card: {err}</div>
@@ -181,7 +186,7 @@ export default function ModelCard({ onBrowse }) {
             <Bar dataKey="mean_abs_impact_usd" radius={[0, 3, 3, 0]} cursor="pointer"
               onClick={(d) => setSelected(d.feature)}>
               {topDrivers.map((d) => (
-                <Cell key={d.feature} fill={d.feature === activeDriver.feature ? '#0A5958' : '#0E7C7B'} />
+                <Cell key={d.feature} fill={d.feature === activeDriver?.feature ? '#0A5958' : '#0E7C7B'} />
               ))}
             </Bar>
           </BarChart>

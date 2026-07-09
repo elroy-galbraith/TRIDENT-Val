@@ -146,6 +146,8 @@ def model_importance(db: Session = Depends(get_db)):
     global _importance_cache
     if _importance_cache is None:
         rows = db.query(Property.features).all()
+        if not rows:  # don't cache an empty result if requested before seeding completes
+            return {"sample_size": 0, "drivers": []}
         _importance_cache = inference.global_importance([r[0] for r in rows])
     return _importance_cache
 

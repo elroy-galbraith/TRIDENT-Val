@@ -144,6 +144,9 @@ def global_importance(payloads: list[dict]) -> dict:
     "what drives the model" chart. The caller is expected to cache the result: property
     feature vectors are immutable after seeding, so this doesn't need to re-run per request.
     """
+    if not payloads:  # e.g. requested before seeding has populated the properties table
+        return {"sample_size": 0, "drivers": []}
+
     spec = get_spec()
     model = get_model()
     X = build_frame(payloads)
