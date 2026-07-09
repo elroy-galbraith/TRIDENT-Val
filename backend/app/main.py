@@ -1,20 +1,47 @@
 import csv
 import io
+import time
 from typing import Optional
 
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from loguru import logger
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, joinedload
 
 from . import inference
-from .db import get_db
-from .models import AuditStatus, BankPortfolioMeta, Property
+from .db import Base, engine, get_db
+from .logging_config import setup_logging
+from .models import AuditStatus, BankPortfolioMeta, Property, SystemLog
+
+setup_logging()
+Base.metadata.create_all(bind=engine)  # idempotent: only creates system_logs on existing DBs
 
 app = FastAPI(title="TRIDENT-Val AVM & Risk Triage Engine", version="1.0-poc")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
+
+@app.on_event("startup")
+def log_startup():
+    logger.info("TRIDENT-Val backend starting up (version {v})", v=app.version)
+
+
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    start = time.perf_counter()
+    response = await call_next(request)
+    duration_ms = round((time.perf_counter() - start) * 1000, 1)
+    level = "ERROR" if response.status_code >= 500 else \
+            "WARNING" if response.status_code >= 400 else "INFO"
+    logger.bind(context={
+        "method": request.method, "path": request.url.path,
+        "status_code": response.status_code, "duration_ms": duration_ms,
+    }).log(level, "{method} {path} -> {status} ({duration}ms)",
+          method=request.method, path=request.url.path,
+          status=response.status_code, duration=duration_ms)
+    return response
 
 LTV_BUCKETS = [("<60%", 0.0, 0.60), ("60-80%", 0.60, 0.80), (">80%", 0.80, 99.0)]
 
@@ -242,10 +269,21 @@ def get_comps(pid: int, limit: int = Query(6, ge=1, le=20), db: Session = Depend
 
 @app.post("/api/v1/valuate")
 def valuate(req: ValuateRequest):
+    start = time.perf_counter()
     try:
-        return inference.valuate_with_drivers(req.features)
+        result = inference.valuate_with_drivers(req.features)
     except Exception as e:  # malformed feature vector
+        logger.bind(context={"error": str(e)}).warning(
+            "AVM inference rejected an invalid feature vector.")
         raise HTTPException(422, f"Invalid feature vector: {e}")
+    latency_ms = round((time.perf_counter() - start) * 1000, 1)
+    logger.bind(context={
+        "inference_latency_ms": latency_ms,
+        "estimated_market_value": result["estimated_market_value"],
+        "error_band_pct": result["error_band_pct"],
+    }).info("AVM inference completed in {latency}ms -> {value}",
+           latency=latency_ms, value=result["estimated_market_value"])
+    return result
 
 
 @app.patch("/api/v1/properties/{pid}/audit")
@@ -253,10 +291,80 @@ def update_audit(pid: int, body: AuditUpdate, db: Session = Depends(get_db)):
     meta = db.query(BankPortfolioMeta).get(pid)
     if not meta:
         raise HTTPException(404, "Property not found")
+    prev_status, prev_notes = meta.audit_status.value, meta.underwriter_notes
     if body.audit_status is not None:
         meta.audit_status = body.audit_status
     if body.underwriter_notes is not None:
         meta.underwriter_notes = body.underwriter_notes
     db.commit()
+
+    if body.audit_status is not None and body.audit_status.value != prev_status:
+        logger.bind(pid=pid, context={
+            "previous_status": prev_status, "new_status": meta.audit_status.value,
+        }).info("Underwriter changed audit status for PID {pid}: {prev} -> {new}",
+               pid=pid, prev=prev_status, new=meta.audit_status.value)
+    if body.underwriter_notes is not None and body.underwriter_notes != prev_notes:
+        logger.bind(pid=pid, context={"notes_length": len(body.underwriter_notes)}).info(
+            "Underwriter updated audit notes for PID {pid}.", pid=pid)
+
     return {"pid": pid, "audit_status": meta.audit_status.value,
             "underwriter_notes": meta.underwriter_notes}
+
+
+# ---------- logging / audit trail ----------
+
+class ClientLogEntry(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    level: str = Field("INFO", description="DEBUG | INFO | WARN | ERROR")
+    logger_name: str = Field("frontend", alias="logger")
+    message: str
+    pid: Optional[int] = None
+    context: Optional[dict] = None
+
+
+def log_row(r: SystemLog) -> dict:
+    return {
+        "id": r.id, "timestamp": r.timestamp.isoformat() if r.timestamp else None,
+        "source": r.source, "level": r.level, "logger": r.logger_name,
+        "message": r.message, "pid": r.pid, "context": r.context,
+    }
+
+
+@app.get("/api/v1/logs")
+def list_logs(
+    db: Session = Depends(get_db),
+    source: Optional[str] = Query(None, pattern="^(backend|frontend)$"),
+    level: Optional[str] = None,
+    pid: Optional[int] = None,
+    search: Optional[str] = None,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+):
+    """Query the unified audit/operational log ledger."""
+    q = db.query(SystemLog)
+    if source:
+        q = q.filter(SystemLog.source == source)
+    if level:
+        q = q.filter(SystemLog.level == level.upper())
+    if pid is not None:
+        q = q.filter(SystemLog.pid == pid)
+    if search:
+        q = q.filter(SystemLog.message.ilike(f"%{search}%"))
+
+    total = q.count()
+    rows = (q.order_by(SystemLog.timestamp.desc())
+             .offset((page - 1) * page_size).limit(page_size).all())
+    return {"total": total, "page": page, "page_size": page_size,
+            "items": [log_row(r) for r in rows]}
+
+
+@app.post("/api/v1/logs/client", status_code=204)
+def log_client_event(entries: list[ClientLogEntry]):
+    """Ingest a batch of frontend (loglevel) log entries into the shared ledger."""
+    level_map = {"TRACE": "DEBUG", "WARN": "WARNING"}
+    for e in entries:
+        level = level_map.get(e.level.upper(), e.level.upper())
+        logger.bind(source="frontend", pid=e.pid, context=e.context,
+                   logger_name=e.logger_name).log(
+            level, "[frontend:{logger}] {message}", logger=e.logger_name, message=e.message)

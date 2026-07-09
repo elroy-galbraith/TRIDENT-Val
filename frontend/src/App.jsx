@@ -3,6 +3,7 @@ import Dashboard from './views/Dashboard.jsx'
 import PortfolioGrid from './views/PortfolioGrid.jsx'
 import Inspector from './views/Inspector.jsx'
 import MapView from './views/MapView.jsx'
+import { logger } from './logger.js'
 
 const TABS = [
   { id: 'dashboard', label: 'Risk Overview' },
@@ -15,9 +16,18 @@ export default function App() {
   const [pid, setPid] = useState(null)
   const [gridStatus, setGridStatus] = useState('')
 
-  const openProperty = (id) => { setPid(id); setView('inspector') }
-  const openTriage = () => { setGridStatus('Flagged: High Variance'); setView('portfolio') }
-  const openTab = (id) => { if (id === 'portfolio') setGridStatus(''); setView(id) }
+  const openProperty = (id) => {
+    logger.track('app', `Opened property inspector for PID ${id}.`, null, id)
+    setPid(id); setView('inspector')
+  }
+  const openTriage = () => {
+    logger.track('app', 'Opened the high-variance triage queue.')
+    setGridStatus('Flagged: High Variance'); setView('portfolio')
+  }
+  const openTab = (id) => {
+    logger.track('app', `Switched to "${id}" view.`)
+    if (id === 'portfolio') setGridStatus(''); setView(id)
+  }
 
   return (
     <div className="min-h-screen">

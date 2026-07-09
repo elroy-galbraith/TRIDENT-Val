@@ -1,8 +1,9 @@
 import enum
 
-from sqlalchemy import (JSON, BigInteger, Column, Enum, Float, ForeignKey,
-                        Integer, Numeric, String, Text)
+from sqlalchemy import (JSON, BigInteger, Column, DateTime, Enum, Float,
+                        ForeignKey, Integer, Numeric, String, Text)
 from sqlalchemy.orm import relationship
+from sqlalchemy.sql import func
 
 from .db import Base
 
@@ -66,3 +67,21 @@ class PropertyImage(Base):
     category = Column(String(32))  # structural category driving the deterministic mapping
 
     prop = relationship("Property", back_populates="image")
+
+
+class SystemLog(Base):
+    """Unified operational + audit log, fed by loguru (backend) and loglevel (frontend).
+
+    Doubles as the compliance audit trail (e.g. underwriter overrides) and as
+    system telemetry (request latency, model inference stats, client errors).
+    """
+    __tablename__ = "system_logs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    timestamp = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+    source = Column(String(16), index=True)     # 'backend' | 'frontend'
+    level = Column(String(10), index=True)       # DEBUG / INFO / WARNING / ERROR
+    logger_name = Column(String(64))              # e.g. 'api.audit', 'frontend.inspector'
+    message = Column(Text, nullable=False)        # human-readable event description
+    pid = Column(BigInteger, index=True, nullable=True)  # related property, if any
+    context = Column(JSON)                         # structured payload (deltas, latency, etc.)
