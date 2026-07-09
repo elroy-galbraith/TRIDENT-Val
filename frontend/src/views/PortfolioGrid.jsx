@@ -60,6 +60,11 @@ export default function PortfolioGrid({ onOpen, initialStatus }) {
   }, [filters, page])
 
   const set = (k) => (e) => { setPage(1); setFilters((f) => ({ ...f, [k]: e.target.value })) }
+  const clearFilters = () => {
+    setPage(1)
+    setFilters((f) => ({ ...f, neighborhood: '', bldg_type: '', audit_status: '', search: '' }))
+  }
+  const hasActiveFilters = !!(filters.neighborhood || filters.bldg_type || filters.audit_status || filters.search)
   const pages = data ? Math.ceil(data.total / data.page_size) : 1
 
   return (
@@ -82,6 +87,15 @@ export default function PortfolioGrid({ onOpen, initialStatus }) {
           <option value="">All audit statuses</option>
           {opts?.audit_statuses.map((n) => <option key={n}>{n}</option>)}
         </select>
+        {hasActiveFilters && (
+          <button
+            onClick={clearFilters}
+            aria-label="Clear all portfolio filters"
+            className="px-3 py-1.5 border border-line rounded-sm text-sm bg-white hover:border-teal"
+          >
+            Clear filters
+          </button>
+        )}
         <select value={filters.sort} onChange={set('sort')} aria-label="Sort portfolio grid" className="border border-line rounded-sm px-2 py-1.5 text-sm bg-white ml-auto">
           <option value="ltv_desc">Highest LTV first</option>
           <option value="ltv_asc">Lowest LTV first</option>
