@@ -14,12 +14,52 @@ const TABS = [
   { id: 'model-card', label: 'Model Card' },
 ]
 
+const VIEW_IDS = new Set(['dashboard', 'portfolio', 'map', 'model-card'])
+
+function stateToPath({ view, pid, gridStatus }) {
+  if (view === 'inspector' && pid != null) return `/inspector/${encodeURIComponent(pid)}`
+  if (view === 'portfolio' && gridStatus) return `/portfolio?status=${encodeURIComponent(gridStatus)}`
+  return `/${view}`
+}
+
+function stateFromLocation() {
+  const segments = window.location.pathname.split('/').filter(Boolean)
+  const [head, arg] = segments
+  if (head === 'inspector' && arg) return { view: 'inspector', pid: decodeURIComponent(arg), gridStatus: '' }
+  if (VIEW_IDS.has(head)) {
+    const status = head === 'portfolio' ? new URLSearchParams(window.location.search).get('status') || '' : ''
+    return { view: head, pid: null, gridStatus: status }
+  }
+  return { view: 'dashboard', pid: null, gridStatus: '' }
+}
+
 export default function App() {
-  const [view, setView] = useState('dashboard')
-  const [pid, setPid] = useState(null)
-  const [gridStatus, setGridStatus] = useState('')
+  const [{ view, pid, gridStatus }, setNavState] = useState(stateFromLocation)
   const [copilotOpen, setCopilotOpen] = useState(true)
   const copilotRef = useRef(null)
+
+  // Pushes a new browser history entry so the back/forward buttons move between
+  // views instead of leaving every page stuck on the initial "/" entry.
+  // The history mutation happens here, outside the setState updater — React's
+  // StrictMode double-invokes updater functions in dev, which would otherwise
+  // push two history entries per navigation.
+  const navigate = (next, { replace = false } = {}) => {
+    const merged = { view, pid, gridStatus, ...next }
+    const path = stateToPath(merged)
+    if (replace) window.history.replaceState(merged, '', path)
+    else window.history.pushState(merged, '', path)
+    setNavState(merged)
+  }
+
+  useEffect(() => {
+    // Normalize the initial URL (e.g. bare "/") without adding an extra history entry.
+    const initial = stateFromLocation()
+    window.history.replaceState(initial, '', stateToPath(initial))
+
+    const onPopState = () => setNavState(stateFromLocation())
+    window.addEventListener('popstate', onPopState)
+    return () => window.removeEventListener('popstate', onPopState)
+  }, [])
 
   // Closing the widget's "X" button calls agent.dispose(), which is terminal — the only way
   // back in is to spin up a fresh PageAgent, since a disposed one can't be reused.
@@ -41,15 +81,15 @@ export default function App() {
 
   const openProperty = (id) => {
     logger.track('app', `Opened property inspector for PID ${id}.`, null, id)
-    setPid(id); setView('inspector')
+    navigate({ view: 'inspector', pid: id })
   }
   const openTriage = () => {
     logger.track('app', 'Opened the high-variance triage queue.')
-    setGridStatus('Flagged: High Variance'); setView('portfolio')
+    navigate({ view: 'portfolio', gridStatus: 'Flagged: High Variance' })
   }
   const openTab = (id) => {
     logger.track('app', `Switched to "${id}" view.`)
-    if (id === 'portfolio') setGridStatus(''); setView(id)
+    navigate({ view: id, gridStatus: id === 'portfolio' ? '' : gridStatus, pid: null })
   }
 
   return (
@@ -86,7 +126,7 @@ export default function App() {
         )}
         {view === 'map' && <MapView onOpen={openProperty} />}
         {view === 'model-card' && <ModelCard onBrowse={() => openTab('portfolio')} />}
-        {view === 'inspector' && <Inspector pid={pid} onBack={() => setView('portfolio')} onOpen={openProperty} />}
+        {view === 'inspector' && <Inspector pid={pid} onBack={() => navigate({ view: 'portfolio', pid: null })} onOpen={openProperty} />}
       </main>
 
       <footer className="max-w-7xl mx-auto px-6 py-4 text-[11px] text-inkmute border-t border-line">
