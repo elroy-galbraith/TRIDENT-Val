@@ -1,20 +1,11 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { CircleMarker, MapContainer, Popup, TileLayer } from 'react-leaflet'
-import 'leaflet/dist/leaflet.css'
-import { api, ltvTier, tierColor, usd, pct } from '../api.js'
-import { Spinner, StatusBadge } from '../components/shared.jsx'
+import { api, tierColor, usd } from '../api.js'
+import { Spinner } from '../components/shared.jsx'
+import PropertyMap from '../components/PropertyMap.jsx'
 
 const AMES_CENTER = [42.0308, -93.6319]
-const MIN_R = 3.5
-const MAX_R = 13
 
-function radiusScale(value, min, max) {
-  if (max === min) return (MIN_R + MAX_R) / 2
-  const t = (value - min) / (max - min)
-  return MIN_R + t * (MAX_R - MIN_R)
-}
-
-export default function MapView({ onOpen }) {
+export default function MapView({ onOpen, height = 560 }) {
   const [data, setData] = useState(null)
   const [err, setErr] = useState(null)
   const [statusFilter, setStatusFilter] = useState('')
@@ -32,19 +23,7 @@ export default function MapView({ onOpen }) {
     return statusFilter ? data.points.filter((p) => p.audit_status === statusFilter) : data.points
   }, [data, statusFilter])
 
-  const { min, max, totalValue } = useMemo(() => {
-    if (!points.length) return { min: 0, max: 0, totalValue: 0 }
-    let minVal = Infinity
-    let maxVal = -Infinity
-    let sum = 0
-    for (const p of points) {
-      const val = p.avm_value
-      if (val < minVal) minVal = val
-      if (val > maxVal) maxVal = val
-      sum += val
-    }
-    return { min: minVal, max: maxVal, totalValue: sum }
-  }, [points])
+  const totalValue = useMemo(() => points.reduce((sum, p) => sum + p.avm_value, 0), [points])
 
   if (err) return <div className="py-16 text-center text-flag text-sm">Couldn't load portfolio map: {err}</div>
   if (!data) return <Spinner label="Plotting portfolio…" />
@@ -81,49 +60,8 @@ export default function MapView({ onOpen }) {
         </div>
       </div>
 
-      <div className="card overflow-hidden" style={{ height: 560 }}>
-        <MapContainer center={AMES_CENTER} zoom={13} preferCanvas style={{ height: '100%', width: '100%' }}>
-          <TileLayer
-            attribution="&copy; OpenStreetMap contributors"
-            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-          />
-          {points.map((p) => {
-            const tier = ltvTier(p.ltv)
-            return (
-              <CircleMarker
-                key={p.pid}
-                center={[p.lat, p.lng]}
-                radius={radiusScale(p.avm_value, min, max)}
-                pathOptions={{
-                  color: tierColor[tier],
-                  fillColor: tierColor[tier],
-                  fillOpacity: 0.55,
-                  weight: 1,
-                }}
-              >
-                <Popup>
-                  <div className="space-y-1 text-sm min-w-[180px]">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="figure font-semibold">PID {p.pid}</span>
-                      <StatusBadge status={p.audit_status} />
-                    </div>
-                    <div className="text-xs text-inkmute">{p.neighborhood} · {p.bldg_type}</div>
-                    <div className="flex items-baseline justify-between pt-1">
-                      <span className="figure font-semibold text-tealdeep">{usd(p.avm_value)}</span>
-                      <span className="figure text-xs" style={{ color: tierColor[tier] }}>LTV {pct(p.ltv)}</span>
-                    </div>
-                    <button
-                      onClick={(e) => { e.stopPropagation(); onOpen(p.pid) }}
-                      className="text-teal hover:underline text-xs pt-1"
-                    >
-                      Open in Portfolio →
-                    </button>
-                  </div>
-                </Popup>
-              </CircleMarker>
-            )
-          })}
-        </MapContainer>
+      <div className="card overflow-hidden">
+        <PropertyMap points={points} center={AMES_CENTER} zoom={13} height={height} onOpen={onOpen} />
       </div>
       <div className="text-[11px] text-inkmute">
         Property coordinates are synthetically placed within their Ames Housing dataset neighborhood for visualization only — not surveyed addresses.

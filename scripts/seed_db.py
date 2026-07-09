@@ -18,6 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "backend"))
 
 from app.db import Base, SessionLocal, engine  # noqa: E402
+from app.geo import property_latlng  # noqa: E402
 from app.models import (AuditStatus, BankPortfolioMeta, Property,  # noqa: E402
                         PropertyImage)
 from app import inference  # noqa: E402
@@ -81,6 +82,7 @@ def main() -> None:
             status = AuditStatus.APPROVED
 
         cat = image_category(row["bldg_type"], row["house_style"])
+        lat, lng = property_latlng(int(row["pid"]), row["neighborhood"])
         session.add(Property(
             pid=int(row["pid"]),
             neighborhood=row["neighborhood"], bldg_type=row["bldg_type"],
@@ -91,6 +93,7 @@ def main() -> None:
             full_bath=int(row["full_bath"]), half_bath=int(row["half_bath"]),
             bedroom_abvgr=int(row["bedroom_abvgr"]),
             sale_price=sale,
+            lat=lat, lng=lng,
             features=payloads[i],
             meta=BankPortfolioMeta(
                 current_loan_balance=round(ratios[i] * sale, 2),

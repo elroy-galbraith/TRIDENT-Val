@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { api, pct, usd } from '../api.js'
 import { LtvChip, Spinner, StatusBadge } from '../components/shared.jsx'
+import PropertyMap from '../components/PropertyMap.jsx'
 
 const QUAL_OPTS = [
   { v: 5, label: 'Excellent' }, { v: 4, label: 'Good' }, { v: 3, label: 'Typical/Average' },
@@ -34,7 +35,7 @@ function Contribution({ item, positive }) {
   )
 }
 
-export default function Inspector({ pid, onBack }) {
+export default function Inspector({ pid, onBack, onOpen }) {
   const [prop, setProp] = useState(null)
   const [err, setErr] = useState(null)
   const [scenario, setScenario] = useState(null)
@@ -43,6 +44,7 @@ export default function Inspector({ pid, onBack }) {
   const [notes, setNotes] = useState('')
   const [status, setStatus] = useState('')
   const [saved, setSaved] = useState(false)
+  const [comps, setComps] = useState(null)
 
   useEffect(() => {
     setProp(null); setResult(null)
@@ -52,6 +54,13 @@ export default function Inspector({ pid, onBack }) {
       setNotes(p.underwriter_notes || '')
       setStatus(p.audit_status)
     }).catch((e) => setErr(e.message))
+  }, [pid])
+
+  useEffect(() => {
+    let active = true
+    setComps(null)
+    api.comps(pid).then((res) => { if (active) setComps(res) }).catch(() => { if (active) setComps(null) })
+    return () => { active = false }
   }, [pid])
 
   const baseline = prop?.baseline_valuation
@@ -234,6 +243,42 @@ export default function Inspector({ pid, onBack }) {
             </div>
           ))}
         </div>
+      </div>
+
+      {/* Location & comparables */}
+      <div className="card p-5">
+        <div className="label">Location &amp; Comparable Properties</div>
+        <div className="text-xs text-inkmute mt-1 mb-3">
+          Subject asset (outlined) against the {comps?.comps.length ?? '…'} nearest comps by neighborhood, size, quality, and vintage.
+        </div>
+        {!comps ? <Spinner label="Finding comparables…" /> : (
+          <div className="grid lg:grid-cols-3 gap-4">
+            <div className="lg:col-span-2 rounded-sm overflow-hidden border border-line">
+              <PropertyMap
+                points={[comps.subject, ...comps.comps]}
+                center={[comps.subject.lat, comps.subject.lng]}
+                zoom={15}
+                height={320}
+                subjectPid={prop.pid}
+                onOpen={onOpen}
+              />
+            </div>
+            <div className="space-y-2 overflow-auto" style={{ maxHeight: 320 }}>
+              {comps.comps.map((c) => (
+                <button key={c.pid} onClick={() => onOpen && onOpen(c.pid)}
+                  className="w-full text-left border border-line rounded-sm p-2 hover:border-teal transition-colors">
+                  <div className="flex items-baseline justify-between">
+                    <span className="figure text-sm font-semibold text-tealdeep">{usd(c.avm_value)}</span>
+                    <span className="text-xs text-inkmute">{c.neighborhood}</span>
+                  </div>
+                  <div className="text-xs text-inkmute">
+                    {c.gr_liv_area?.toLocaleString()} sq ft · Qual {c.overall_qual} · Built {c.year_built}
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   )

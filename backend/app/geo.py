@@ -1,11 +1,14 @@
 """Synthetic geocoding for the Ames Housing dataset.
 
 The Ames dataset only carries a categorical `Neighborhood` code (e.g. "NAmes",
-"CollgCr") — there is no street address or lat/lng in the source data. For the
-portfolio map view we approximate each neighborhood's real-world position in
-Ames, Iowa with a hand-placed centroid, then deterministically jitter each
-property within a small radius of its neighborhood centroid so every asset
-gets a distinct, stable pin (same pid always lands on the same point).
+"CollgCr") — there is no street address or lat/lng in the source data. To
+mirror how a real geocoding pipeline would work, `property_latlng` is called
+once per property at seed time (see scripts/seed_db.py) and the result is
+persisted on `Property.lat`/`Property.lng`, exactly like coordinates returned
+by a geocoding API would be stored. It approximates each neighborhood's
+real-world position in Ames, Iowa with a hand-placed centroid, then
+deterministically jitters each property within a small radius of its
+neighborhood centroid so every asset gets a distinct, stable point.
 
 Coordinates are approximate placements for visualization purposes only — not
 surveyed addresses.

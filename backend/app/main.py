@@ -11,7 +11,6 @@ from sqlalchemy.orm import Session, joinedload
 
 from . import inference
 from .db import get_db
-from .geo import property_latlng
 from .models import AuditStatus, BankPortfolioMeta, Property
 
 app = FastAPI(title="TRIDENT-Val AVM & Risk Triage Engine", version="1.0-poc")
@@ -32,6 +31,35 @@ class AuditUpdate(BaseModel):
 
 
 # ---------- helpers ----------
+
+def map_point(p: Property) -> dict:
+    avm_value = float(p.meta.current_avm_value)
+    return {
+        "pid": p.pid,
+        "neighborhood": p.neighborhood,
+        "bldg_type": p.bldg_type,
+        "lat": p.lat,
+        "lng": p.lng,
+        "avm_value": avm_value,
+        "gr_liv_area": p.gr_liv_area,
+        "overall_qual": p.overall_qual,
+        "year_built": p.year_built,
+        "ltv": round(float(p.meta.current_loan_balance) / avm_value, 4) if avm_value else 0.0,
+        "audit_status": p.meta.audit_status.value,
+    }
+
+
+def comp_score(subject: Property, candidate: Property) -> float:
+    score = 0.0
+    if candidate.neighborhood == subject.neighborhood:
+        score += 100.0
+    if candidate.bldg_type == subject.bldg_type:
+        score += 20.0
+    score -= abs((candidate.gr_liv_area or 0) - (subject.gr_liv_area or 0)) / 50.0
+    score -= abs((candidate.overall_qual or 0) - (subject.overall_qual or 0)) * 5.0
+    score -= abs((candidate.year_built or 0) - (subject.year_built or 0)) / 5.0
+    return score
+
 
 def card(p: Property) -> dict:
     return {
@@ -109,23 +137,8 @@ def portfolio_summary(db: Session = Depends(get_db)):
 
 @app.get("/api/v1/portfolio/map")
 def portfolio_map(db: Session = Depends(get_db)):
-    rows = db.query(Property.pid, Property.neighborhood, Property.bldg_type,
-                    BankPortfolioMeta.current_avm_value, BankPortfolioMeta.current_loan_balance,
-                    BankPortfolioMeta.audit_status).join(BankPortfolioMeta).all()
-    points = []
-    for pid, neighborhood, bldg_type, avm_value, loan_balance, audit_status in rows:
-        lat, lng = property_latlng(pid, neighborhood)
-        points.append({
-            "pid": pid,
-            "neighborhood": neighborhood,
-            "bldg_type": bldg_type,
-            "lat": lat,
-            "lng": lng,
-            "avm_value": float(avm_value),
-            "loan_balance": float(loan_balance),
-            "ltv": round(float(loan_balance) / float(avm_value), 4) if avm_value else 0.0,
-            "audit_status": audit_status.value,
-        })
+    rows = db.query(Property).join(BankPortfolioMeta).options(joinedload(Property.meta)).all()
+    points = [map_point(p) for p in rows]
     return {"count": len(points), "points": points}
 
 
@@ -209,6 +222,22 @@ def get_property(pid: int, db: Session = Depends(get_db)):
         "feature_labels": inference.LABELS,
         "baseline_valuation": baseline,
     }
+
+
+@app.get("/api/v1/properties/{pid}/comps")
+def get_comps(pid: int, limit: int = Query(6, ge=1, le=20), db: Session = Depends(get_db)):
+    subject = db.query(Property).options(joinedload(Property.meta)).get(pid)
+    if not subject:
+        raise HTTPException(404, "Property not found")
+
+    candidates = (db.query(Property)
+                  .join(BankPortfolioMeta)
+                  .options(joinedload(Property.meta))
+                  .filter(Property.pid != pid)
+                  .all())
+    ranked = sorted(candidates, key=lambda c: comp_score(subject, c), reverse=True)[:limit]
+
+    return {"subject": map_point(subject), "comps": [map_point(c) for c in ranked]}
 
 
 @app.post("/api/v1/valuate")
