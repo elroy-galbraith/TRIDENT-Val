@@ -19,6 +19,7 @@ import json
 import os
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 
 import httpx
@@ -26,6 +27,12 @@ from loguru import logger
 from sqlalchemy.orm import Session
 
 from .models import ExtractionFieldResult, ExtractionRun, ExtractionRunStatus, SyntheticDocument
+
+# SyntheticDocument.file_path is stored relative to the repo root (see app.synthetic_reports
+# and app.main's generate_documents), not relative to whatever the process's cwd happens to
+# be — the documented way to run this backend is `cd backend && uvicorn app.main:app`, so cwd
+# is backend/, not the repo root. Resolve against this anchor before touching the filesystem.
+_REPO_ROOT = Path(__file__).resolve().parents[2]
 
 EXTRACTION_LLM_BASE_URL = os.environ.get(
     "EXTRACTION_LLM_PROVIDER_BASE_URL",
@@ -103,7 +110,9 @@ def _docling_convert(file_path: str) -> str:
     """Lazy-imported: docling pulls in torch and downloads layout/OCR models from
     HuggingFace on first DocumentConverter() call. Import failures and conversion failures
     (including a blocked/offline model download) both raise — the caller marks the
-    ExtractionRun as failed rather than letting either crash the request."""
+    ExtractionRun as failed rather than letting either crash the request.
+
+    `file_path` must already be an absolute path — see _REPO_ROOT above for why."""
     from docling.document_converter import DocumentConverter  # noqa: PLC0415
     converter = DocumentConverter()
     result = converter.convert(file_path)
@@ -178,8 +187,12 @@ def extract_document(db: Session, document_id: int, actor: Optional[str]) -> Ext
     db.refresh(run)
 
     try:
+        absolute_path = _REPO_ROOT / document.file_path
+        if not absolute_path.is_file():
+            raise FileNotFoundError(f"Document file not found on disk: {absolute_path}")
+
         docling_start = time.perf_counter()
-        document_text = _docling_convert(document.file_path)
+        document_text = _docling_convert(str(absolute_path))
         docling_latency_ms = (time.perf_counter() - docling_start) * 1000
 
         if not is_llm_configured():
