@@ -6,5 +6,5 @@ select
     audit_status,
     underwriter_notes,
     resolved_model_id,
-    current_loan_balance / nullif(current_avm_value, 0) as ltv
+    round(current_loan_balance / nullif(current_avm_value, 0), 4) as ltv
 from {{ source('trident_operational', 'bank_portfolio_meta') }}

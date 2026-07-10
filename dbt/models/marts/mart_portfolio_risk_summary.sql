@@ -10,4 +10,6 @@ select
     sum(current_loan_balance) as total_loan_balance,
     sum(current_avm_value) as total_avm_value
 from {{ ref('dim_properties') }}
-group by 1, 2
+group by
+    neighborhood,
+    bldg_type

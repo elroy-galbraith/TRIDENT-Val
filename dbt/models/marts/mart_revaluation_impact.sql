@@ -11,4 +11,8 @@ select
     max(r.new_value - r.prior_value) as max_value_change
 from {{ ref('stg_revaluation_results') }} r
 left join {{ ref('stg_revaluation_runs') }} ru using (run_id)
-group by 1, 2, 3, 4
+group by
+    ru.run_id,
+    ru.as_of_date,
+    ru.scenario_name,
+    ru.scenario_type

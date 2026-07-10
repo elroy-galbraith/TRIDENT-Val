@@ -27,7 +27,8 @@ models:
       - name: model_status
         tests:
           - accepted_values:
-              values: ['Champion', 'Challenger', 'Retired']
+              arguments:
+                values: ['Champion', 'Challenger', 'Retired']
 
   - name: stg_model_valuations
     description: Every registered model's valuation for every property.

@@ -29,7 +29,9 @@ select
     ch.challenger_value,
     ch.challenger_value - c.champion_value as value_delta,
     (ch.challenger_value - c.champion_value) / nullif(c.champion_value, 0) as value_delta_pct,
-    abs((ch.challenger_value - c.champion_value) / nullif(c.champion_value, 0)) >= 0.10
-        as material_disagreement
+    coalesce(
+        abs((ch.challenger_value - c.champion_value) / nullif(c.champion_value, 0)) >= 0.10,
+        false
+    ) as material_disagreement
 from champion c
 inner join challenger ch using (pid)
