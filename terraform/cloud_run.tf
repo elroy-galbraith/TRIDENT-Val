@@ -91,12 +91,17 @@ resource "google_cloud_run_v2_service" "backend" {
       }
 
       startup_probe {
+        # CMD runs scripts/wait_and_seed.py before uvicorn ever binds the port — up to 60s
+        # of DB-connect retries, then (on a fresh DB) a full portfolio seed/shadow-scoring
+        # pass plus bcrypt user hashing. Budget generously for that cold-start path; once
+        # seeded, later cold starts return in a couple seconds and the probe succeeds early.
         http_get {
           path = "/api/v1/health"
         }
-        initial_delay_seconds = 5
-        period_seconds        = 5
-        failure_threshold     = 6
+        initial_delay_seconds = 10
+        period_seconds        = 10
+        timeout_seconds       = 3
+        failure_threshold     = 60
       }
     }
 
