@@ -177,6 +177,7 @@ function QuarantinePanel({ canResolve, refreshKey }) {
   const [page, setPage] = useState(1)
   const [showResolved, setShowResolved] = useState(false)
   const [notesById, setNotesById] = useState({})
+  const [expandedId, setExpandedId] = useState(null)
 
   const load = () => {
     setData(null)
@@ -202,8 +203,13 @@ function QuarantinePanel({ canResolve, refreshKey }) {
       <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
         <div>
           <div className="label">Quarantine</div>
-          <p className="text-xs text-inkmute mt-1">
-            Malformed rows from any source are held here with a reason, never silently dropped.
+          <p className="text-xs text-inkmute mt-1 max-w-2xl">
+            Malformed rows from any source are held here with a reason, never silently
+            dropped — click <span className="font-medium">View record</span> to see exactly
+            what was submitted. Resolving is a human attestation of what you did about it
+            (e.g. "corrected in the source spreadsheet, will re-sync"); it doesn't
+            auto-correct or re-ingest the row — fix it upstream and run a new sync to load
+            the corrected version.
           </p>
         </div>
         <label className="text-xs flex items-center gap-1.5">
@@ -221,31 +227,52 @@ function QuarantinePanel({ canResolve, refreshKey }) {
             <thead>
               <tr className="text-left text-inkmute border-b border-line">
                 <th className="py-1.5 pr-3">Source</th><th className="py-1.5 pr-3">Reason</th>
-                <th className="py-1.5 pr-3">Detail</th><th className="py-1.5">Action</th>
+                <th className="py-1.5 pr-3">Detail</th><th className="py-1.5 pr-3">Record</th>
+                <th className="py-1.5">Action</th>
               </tr>
             </thead>
             <tbody>
               {data.items.map((q) => (
-                <tr key={q.id} className="border-b border-line last:border-0 align-top">
-                  <td className="py-1.5 pr-3"><SourceSystemBadge source={q.source_system} /></td>
-                  <td className="py-1.5 pr-3 text-xs font-medium text-flag">{q.reason_code}</td>
-                  <td className="py-1.5 pr-3 text-xs max-w-sm">{q.reason_detail}</td>
-                  <td className="py-1.5">
-                    {q.resolved ? (
-                      <span className="text-xs text-ok">Resolved by {q.resolved_by}</span>
-                    ) : canResolve ? (
-                      <div className="flex gap-1.5 items-center">
-                        <input placeholder="notes (optional)" value={notesById[q.id] || ''}
-                          onChange={(e) => setNotesById((n) => ({ ...n, [q.id]: e.target.value }))}
-                          className="text-xs border border-line rounded-sm px-1.5 py-1 w-32" />
-                        <button onClick={() => resolve(q.id)}
-                          className="text-xs bg-ink hover:bg-black text-white px-2 py-1 rounded-sm">
-                          Resolve
-                        </button>
-                      </div>
-                    ) : <span className="text-xs text-inkmute">Unresolved</span>}
-                  </td>
-                </tr>
+                <React.Fragment key={q.id}>
+                  <tr className="border-b border-line last:border-0 align-top">
+                    <td className="py-1.5 pr-3"><SourceSystemBadge source={q.source_system} /></td>
+                    <td className="py-1.5 pr-3 text-xs font-medium text-flag">{q.reason_code}</td>
+                    <td className="py-1.5 pr-3 text-xs max-w-sm">{q.reason_detail}</td>
+                    <td className="py-1.5 pr-3">
+                      <button onClick={() => setExpandedId(expandedId === q.id ? null : q.id)}
+                        className="text-teal hover:underline text-xs">
+                        {expandedId === q.id ? 'Hide' : 'View'} record
+                      </button>
+                    </td>
+                    <td className="py-1.5">
+                      {q.resolved ? (
+                        <span className="text-xs text-ok">Resolved by {q.resolved_by}</span>
+                      ) : canResolve ? (
+                        <div className="flex gap-1.5 items-center">
+                          <input placeholder="notes (optional)" value={notesById[q.id] || ''}
+                            onChange={(e) => setNotesById((n) => ({ ...n, [q.id]: e.target.value }))}
+                            className="text-xs border border-line rounded-sm px-1.5 py-1 w-32" />
+                          <button onClick={() => resolve(q.id)}
+                            className="text-xs bg-ink hover:bg-black text-white px-2 py-1 rounded-sm">
+                            Resolve
+                          </button>
+                        </div>
+                      ) : <span className="text-xs text-inkmute">Unresolved</span>}
+                    </td>
+                  </tr>
+                  {expandedId === q.id && (
+                    <tr>
+                      <td colSpan={5} className="pb-3">
+                        <pre className="text-[11px] bg-paper border border-line rounded-sm p-2 overflow-auto max-h-40">
+                          {JSON.stringify(q.raw_record, null, 2)}
+                        </pre>
+                        {q.resolved && q.resolution_notes && (
+                          <div className="text-xs text-inkmute mt-1">Resolution notes: {q.resolution_notes}</div>
+                        )}
+                      </td>
+                    </tr>
+                  )}
+                </React.Fragment>
               ))}
             </tbody>
           </table>
