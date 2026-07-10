@@ -63,15 +63,26 @@ function GenerateForm({ onGenerated }) {
   const [degrade, setDegrade] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState(null)
+  const [notice, setNotice] = useState(null)
 
   const submit = async () => {
     const pids = pidsText.split(/[\s,]+/).map((s) => parseInt(s, 10)).filter((n) => !isNaN(n))
     if (pids.length === 0) { setError('Enter at least one PID'); return }
     setSubmitting(true)
     setError(null)
+    setNotice(null)
     try {
       const r = await api.generateDocuments(pids, style, degrade)
       logger.track('document-intake', `Generated ${r.documents.length} synthetic document(s).`, r)
+      if (r.not_found?.length) {
+        // These pids don't exist in the seeded property book — generation silently skips
+        // them server-side, so this is the only place that failure becomes visible.
+        setNotice(
+          r.documents.length === 0
+            ? `No documents generated — none of these PIDs are in the property book: ${r.not_found.join(', ')}.`
+            : `Generated ${r.documents.length} document(s). Not found in the property book: ${r.not_found.join(', ')}.`
+        )
+      }
       setPidsText('')
       onGenerated()
     } catch (e) {
@@ -111,6 +122,7 @@ function GenerateForm({ onGenerated }) {
         </label>
       </div>
       {error && <div className="text-sm text-flag">{error}</div>}
+      {notice && <div className="text-sm text-amber">{notice}</div>}
       <button onClick={submit} disabled={submitting}
         className="bg-ink hover:bg-black text-white text-sm font-medium px-4 py-2 rounded-sm disabled:opacity-50">
         {submitting ? 'Generating…' : 'Generate'}

@@ -1050,9 +1050,11 @@ def generate_documents(body: DocumentGenerateRequest, db: Session = Depends(get_
     style = SyntheticReportStyle(body.style)
     synthetic_reports.DOCS_DIR.mkdir(parents=True, exist_ok=True)
     created = []
+    not_found = []
     for pid in body.pids:
         result = synthetic_reports.render_synthetic_report_pdf(db, pid, style)
         if result is None:
+            not_found.append(pid)  # no Property on file for this pid — surfaced below, not silently dropped
             continue
         pdf_bytes, ground_truth = result
         degradation_method = None
@@ -1073,11 +1075,11 @@ def generate_documents(body: DocumentGenerateRequest, db: Session = Depends(get_
     db.commit()
 
     logger.bind(actor=user.username, context={
-        "pids_requested": body.pids, "documents_created": len(created), "style": style.value,
-        "degraded": body.degrade,
-    }).info("Generated {n} synthetic document(s) ({style}, degraded={degraded}).",
-           n=len(created), style=style.value, degraded=body.degrade)
-    return {"documents": [document_row(d) for d in created]}
+        "pids_requested": body.pids, "documents_created": len(created), "not_found": not_found,
+        "style": style.value, "degraded": body.degrade,
+    }).info("Generated {n} synthetic document(s) ({style}, degraded={degraded}); {nf} pid(s) not found.",
+           n=len(created), style=style.value, degraded=body.degrade, nf=len(not_found))
+    return {"documents": [document_row(d) for d in created], "not_found": not_found}
 
 
 @app.get("/api/v1/documents")
