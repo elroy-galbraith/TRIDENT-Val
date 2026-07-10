@@ -1,0 +1,10 @@
+# Copy to terraform.tfvars and fill in. terraform.tfvars is gitignored — never commit it.
+
+project_id        = "your-gcp-project-id"
+region             = "us-central1"
+github_repository  = "elroy-galbraith/trident-val"
+
+# Optional — leave blank to deploy with the AI copilot / AI-drafted report
+# narrative disabled; both degrade gracefully (see .env.example at repo root).
+# copilot_provider_api_key    = ""
+# report_llm_provider_api_key = ""

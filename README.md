@@ -55,6 +55,15 @@ On Windows PowerShell replace the seed line with:
 Upgrading an existing checkout? Delete `trident.db` and rerun the seed script — see
 [Authentication & Roles](#authentication--roles-poc-grade).
 
+## Deploying to Google Cloud
+
+Production/demo hosting runs on GCP (Cloud Run + Cloud SQL), provisioned by Terraform
+in `terraform/` with GitHub Actions CI/CD (`.github/workflows/deploy.yml`) deploying
+on every push to `main`. See [docs/deployment.md](docs/deployment.md) for the full
+setup walkthrough and [ADR 0017](docs/adrs/0017-gcp-cloud-run-terraform-infrastructure.md)
+for the reasoning. `render.yaml` remains for reference but is no longer the primary
+deploy target.
+
 ## Authentication & Roles (PoC-grade)
 
 TRIDENT-Val requires a login. This is a lightweight foundation for governance — a real
