@@ -15,6 +15,17 @@ locals {
     copilot-provider-api-key    = var.copilot_provider_api_key
     report-llm-provider-api-key = var.report_llm_provider_api_key
   }
+
+  # copilot-provider-api-key and report-llm-provider-api-key are optional and
+  # default to "" — Secret Manager rejects a version with an empty payload, so
+  # skip creating a version until a real value is supplied (via tfvars or
+  # `gcloud secrets versions add`). The secret resource itself is still created
+  # for every key so IAM access and the Cloud Run secret_key_ref can bind to it.
+  #
+  # nonsensitive() here only declassifies "is this key blank?", not the secret
+  # value itself — needed because for_each refuses a set/map whose membership
+  # depends on a sensitive value.
+  secret_version_keys = toset([for k, v in local.secrets : k if nonsensitive(v != "")])
 }
 
 resource "google_secret_manager_secret" "this" {
@@ -30,9 +41,9 @@ resource "google_secret_manager_secret" "this" {
 }
 
 resource "google_secret_manager_secret_version" "this" {
-  for_each    = local.secrets
-  secret      = google_secret_manager_secret.this[each.key].id
-  secret_data = each.value
+  for_each    = local.secret_version_keys
+  secret      = google_secret_manager_secret.this[each.value].id
+  secret_data = local.secrets[each.value]
 }
 
 # Only the backend runtime SA reads secrets — the frontend never touches them.

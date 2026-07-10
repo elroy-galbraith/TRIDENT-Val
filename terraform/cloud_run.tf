@@ -21,6 +21,11 @@ resource "google_cloud_run_v2_service" "backend" {
       }
 
       resources {
+        # Explicitly set: setting `resources.limits` at all makes the provider
+        # default cpu_idle to false (CPU always allocated), which needs >=512Mi
+        # and defeats scale-to-zero cost savings. true restores the normal
+        # Cloud Run default (CPU only allocated while handling a request).
+        cpu_idle = true
         limits = {
           cpu    = var.backend_cpu
           memory = var.backend_memory
@@ -52,22 +57,30 @@ resource "google_cloud_run_v2_service" "backend" {
         value = "true"
       }
 
-      env {
-        name = "COPILOT_PROVIDER_API_KEY"
-        value_source {
-          secret_key_ref {
-            secret  = google_secret_manager_secret.this["copilot-provider-api-key"].secret_id
-            version = "latest"
+      # Omitted entirely (rather than pointed at a "latest" version that may not
+      # exist yet) when the corresponding tfvar is left blank — see secrets.tf.
+      dynamic "env" {
+        for_each = contains(local.secret_version_keys, "copilot-provider-api-key") ? [1] : []
+        content {
+          name = "COPILOT_PROVIDER_API_KEY"
+          value_source {
+            secret_key_ref {
+              secret  = google_secret_manager_secret.this["copilot-provider-api-key"].secret_id
+              version = "latest"
+            }
           }
         }
       }
 
-      env {
-        name = "REPORT_LLM_PROVIDER_API_KEY"
-        value_source {
-          secret_key_ref {
-            secret  = google_secret_manager_secret.this["report-llm-provider-api-key"].secret_id
-            version = "latest"
+      dynamic "env" {
+        for_each = contains(local.secret_version_keys, "report-llm-provider-api-key") ? [1] : []
+        content {
+          name = "REPORT_LLM_PROVIDER_API_KEY"
+          value_source {
+            secret_key_ref {
+              secret  = google_secret_manager_secret.this["report-llm-provider-api-key"].secret_id
+              version = "latest"
+            }
           }
         }
       }
@@ -129,6 +142,7 @@ resource "google_cloud_run_v2_service" "frontend" {
       image = var.frontend_image
 
       resources {
+        cpu_idle = true
         limits = {
           cpu    = var.frontend_cpu
           memory = var.frontend_memory
