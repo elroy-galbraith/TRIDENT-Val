@@ -11,7 +11,7 @@ minutes idle, and there's no CI/CD — deploys are whatever Render's GitHub inte
 does on push, with no build/test gate.
 
 Moving off Render, the app itself doesn't need to change shape: same Docker backend,
-same static-frontend-with-reverse-proxy pattern (`frontend/nginx.conf.template`),
+same static-frontend-with-reverse-proxy pattern (`frontend/default.conf.template`),
 same Postgres. What's needed is a cloud target the team can run infra-as-code against,
 with real CI/CD.
 
@@ -54,10 +54,10 @@ all provisioned by Terraform (`terraform/`):
   infra to bootstrap once and protect — it holds the DB password and session secret in
   plaintext, same as any Terraform state managing secrets.
 - The frontend's nginx config had to become a runtime template
-  (`frontend/nginx.conf.template` + `frontend/docker-entrypoint.sh`) instead of a
-  static file, since Cloud Run only assigns the backend's URL and the frontend's
-  listen port after Terraform creates them — this is the one code-level change this
-  migration required.
+  (`frontend/default.conf.template`, rendered at container start by the nginx base
+  image's own entrypoint) instead of a static file, since Cloud Run only assigns the
+  backend's URL and the frontend's listen port after Terraform creates them — this is
+  the one code-level change this migration required.
 
 ## Alternatives considered
 - **GKE Autopilot:** rejected; no workload here needs pod-level control or

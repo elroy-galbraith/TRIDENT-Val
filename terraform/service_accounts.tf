@@ -5,6 +5,8 @@ resource "google_service_account" "backend" {
   project      = var.project_id
   account_id   = "${var.app_name}-backend-run"
   display_name = "${var.app_name} backend (Cloud Run)"
+
+  depends_on = [google_project_service.apis]
 }
 
 resource "google_project_iam_member" "backend_cloudsql_client" {
@@ -19,6 +21,8 @@ resource "google_service_account" "frontend" {
   project      = var.project_id
   account_id   = "${var.app_name}-frontend-run"
   display_name = "${var.app_name} frontend (Cloud Run)"
+
+  depends_on = [google_project_service.apis]
 }
 
 # Identity GitHub Actions assumes (via Workload Identity Federation, see
@@ -27,6 +31,8 @@ resource "google_service_account" "deployer" {
   project      = var.project_id
   account_id   = "${var.app_name}-gha-deployer"
   display_name = "${var.app_name} GitHub Actions deployer"
+
+  depends_on = [google_project_service.apis]
 }
 
 resource "google_project_iam_member" "deployer_artifact_registry_writer" {

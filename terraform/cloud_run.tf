@@ -135,10 +135,9 @@ resource "google_cloud_run_v2_service" "frontend" {
         }
       }
 
-      # Consumed by frontend/docker-entrypoint.sh to build nginx's reverse-proxy
-      # target for /api/* at container start (see that file for why this can't be
-      # baked into the image at build time — Cloud Run only knows the backend's URL
-      # after Terraform creates it).
+      # Templated into nginx's reverse-proxy target for /api/* at container start
+      # (see frontend/default.conf.template) — Cloud Run only knows the backend's
+      # URL after Terraform creates it, so this can't be baked in at build time.
       env {
         name  = "BACKEND_URL"
         value = google_cloud_run_v2_service.backend.uri
