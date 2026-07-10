@@ -7,3 +7,10 @@ nohup.out
 /logs/
 .env
 .DS_Store
+
+# Terraform
+terraform/.terraform/
+terraform/terraform.tfstate
+terraform/terraform.tfstate.backup
+terraform/terraform.tfvars
+terraform/*.tfplan
