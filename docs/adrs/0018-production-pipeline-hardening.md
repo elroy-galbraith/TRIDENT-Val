@@ -1,4 +1,4 @@
-# ADR 0017: Production pipeline hardening — migrations, model monitoring, and in-tenant extraction ahead of ingestion buildout
+# ADR 0018: Production pipeline hardening — migrations, model monitoring, and in-tenant extraction ahead of ingestion buildout
 
 **Status:** Proposed · **Date:** 2026-07
 
