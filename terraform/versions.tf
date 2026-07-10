@@ -18,10 +18,10 @@ terraform {
   # in) — see docs/deployment.md for the one-time `gcloud storage buckets create`
   # step, then uncomment this block and run `terraform init -migrate-state`.
   #
-  # backend "gcs" {
-  #   bucket = "trident-val-tfstate"
-  #   prefix = "terraform/state"
-  # }
+  backend "gcs" {
+    bucket = "trident-val-tfstate"
+    prefix = "terraform/state"
+  }
 }
 
 provider "google" {
