@@ -888,9 +888,13 @@ def sync_ingestion(body: IngestionSyncRequest, db: Session = Depends(get_db),
                    user: User = Depends(require_role(UserRole.UNDERWRITER, UserRole.ADMIN))):
     """Trigger a dlt sync for one source system, or every source via source_system="all".
     Synchronous — matches the rest of the app's heavy-but-synchronous operations (report
-    generation, revaluation cycles)."""
+    generation, revaluation cycles). Each source is isolated: if one fails (e.g. the
+    vendor_api service being down), the others still run rather than the whole "all" sync
+    aborting — the same "one bad thing shouldn't take down everything else" ethos as
+    quarantine. Only raises when every requested source failed."""
     targets = list(SourceSystem) if body.source_system == "all" else [SourceSystem(body.source_system)]
     runs = []
+    failures = []
     for source_system in targets:
         try:
             run = ingestion_run_sync(db, source_system, user.username)
@@ -899,7 +903,16 @@ def sync_ingestion(body: IngestionSyncRequest, db: Session = Depends(get_db),
                 "source_system": source_system.value, "error": str(e),
             }).error("Ingestion sync failed for {source}: {error}",
                     source=source_system.value, error=str(e))
-            raise HTTPException(500, f"Sync failed for {source_system.value}: {e}")
+            failures.append(source_system.value)
+            # ingestion_run_sync already persisted this attempt as a failed IngestionRun
+            # (status=failed, error set) before re-raising — fetch it so the response still
+            # reports it instead of vanishing, then keep going to the next source.
+            failed_run = (db.query(IngestionRun)
+                         .filter(IngestionRun.source_system == source_system)
+                         .order_by(IngestionRun.id.desc()).first())
+            if failed_run:
+                runs.append(failed_run)
+            continue
         runs.append(run)
         logger.bind(actor=user.username, context={
             "run_id": run.id, "source_system": source_system.value,
@@ -908,7 +921,10 @@ def sync_ingestion(body: IngestionSyncRequest, db: Session = Depends(get_db),
         }).info("Ingestion sync #{run_id} ({source}): {loaded} loaded, {quarantined} quarantined.",
                run_id=run.id, source=source_system.value, loaded=run.records_loaded,
                quarantined=run.records_quarantined)
-    return {"runs": [ingestion_run_row(r) for r in runs]}
+
+    if failures and len(failures) == len(targets):
+        raise HTTPException(502, f"Sync failed for: {', '.join(failures)}")
+    return {"runs": [ingestion_run_row(r) for r in runs], "failures": failures}
 
 
 @app.get("/api/v1/ingestion/runs")

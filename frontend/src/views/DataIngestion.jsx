@@ -268,6 +268,7 @@ export default function DataIngestion({ user }) {
   const [runs, setRuns] = useState(null)
   const [syncingSource, setSyncingSource] = useState(null)
   const [err, setErr] = useState(null)
+  const [partialFailure, setPartialFailure] = useState(null)
   const [refreshKey, setRefreshKey] = useState(0)
 
   const canSync = user?.role === 'Underwriter' || user?.role === 'Admin'
@@ -279,9 +280,16 @@ export default function DataIngestion({ user }) {
 
   const doSync = async (sourceId) => {
     setSyncingSource(sourceId)
+    setPartialFailure(null)
     try {
       const r = await api.ingestionSync(sourceId)
       logger.track('ingestion', `Ran ingestion sync for ${sourceId}.`, r)
+      // A sync against "all" sources isolates failures per source rather than aborting the
+      // whole batch (see backend/app/main.py) — one down source (e.g. vendor_api not
+      // running) still shows up here even though the others succeeded.
+      if (r.failures?.length) {
+        setPartialFailure(`Sync failed for: ${r.failures.join(', ')} — check that service is reachable.`)
+      }
       await loadRuns()
       setRefreshKey((k) => k + 1)  // provenance + quarantine panels don't poll on their own
     } catch (e) {
@@ -315,6 +323,12 @@ export default function DataIngestion({ user }) {
           </button>
         )}
       </div>
+
+      {partialFailure && (
+        <div className="card p-4 border-flag/40 bg-flag/5 text-sm text-flag">
+          {partialFailure}
+        </div>
+      )}
 
       {driftRuns.length > 0 && (
         <div className="card p-4 border-amber/40 bg-amber/5 text-sm">
