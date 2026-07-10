@@ -1,0 +1,22 @@
+name: 'trident_val_analytics'
+version: '1.0.0'
+config-version: 2
+
+profile: 'trident_val'
+
+model-paths: ["models"]
+seed-paths: ["seeds"]
+test-paths: ["tests"]
+macro-paths: ["macros"]
+
+target-path: "target"
+clean-targets: ["target", "dbt_packages"]
+
+models:
+  trident_val_analytics:
+    staging:
+      +materialized: view
+      +schema: staging
+    marts:
+      +materialized: table
+      +schema: marts

@@ -1,0 +1,78 @@
+version: 2
+
+models:
+  - name: stg_properties
+    description: One row per property, cleaned column set from the operational properties table.
+    columns:
+      - name: pid
+        tests: [unique, not_null]
+
+  - name: stg_bank_portfolio_meta
+    description: 1:1 with stg_properties — booked AVM value, derived LTV, and audit triage state.
+    columns:
+      - name: pid
+        tests:
+          - unique
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_properties')
+                field: pid
+
+  - name: stg_models
+    description: Model risk inventory (champion/challenger/retired).
+    columns:
+      - name: model_id
+        tests: [unique, not_null]
+      - name: model_status
+        tests:
+          - accepted_values:
+              values: ['Champion', 'Challenger', 'Retired']
+
+  - name: stg_model_valuations
+    description: Every registered model's valuation for every property.
+    columns:
+      - name: model_valuation_id
+        tests: [unique, not_null]
+      - name: pid
+        tests:
+          - relationships:
+              arguments:
+                to: ref('stg_properties')
+                field: pid
+      - name: model_id
+        tests:
+          - relationships:
+              arguments:
+                to: ref('stg_models')
+                field: model_id
+
+  - name: stg_revaluation_runs
+    description: One row per periodic revaluation cycle.
+    columns:
+      - name: run_id
+        tests: [unique, not_null]
+
+  - name: stg_revaluation_results
+    description: Per-asset outcome of each revaluation run.
+    columns:
+      - name: revaluation_result_id
+        tests: [unique, not_null]
+      - name: run_id
+        tests:
+          - relationships:
+              arguments:
+                to: ref('stg_revaluation_runs')
+                field: run_id
+
+  - name: stg_assignments
+    description: Underwriter work-queue tracking on flagged assets.
+    columns:
+      - name: assignment_id
+        tests: [unique, not_null]
+
+  - name: stg_users
+    description: Demo auth users, non-sensitive columns only.
+    columns:
+      - name: user_id
+        tests: [unique, not_null]

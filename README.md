@@ -322,6 +322,39 @@ this cycle refilled, with an AI-drafted executive summary — same IVS 103 / Red
 `.disclosure-box`, and LLM-narrates-never-computes guarantee as the asset/portfolio reports
 above (see [Report Export](#report-export-ivs-103--rics-red-book-vps-6)).
 
+## Analytics (dbt)
+
+The operational schema (`properties`, `bank_portfolio_meta`, `models`, `model_valuations`,
+`revaluation_runs`/`revaluation_results`, `assignments`, `users`) is owned by the FastAPI
+backend's SQLAlchemy models — dbt does **not** manage that schema or replace migrations. It
+sits on top as a read-only analytics/transformation layer, in `dbt/`, connecting to the same
+Postgres database and building staging + mart models for portfolio reporting:
+
+- `stg_*` — one thin, renamed/typed view per operational table (`dbt/models/staging/`).
+- `dim_properties` / `fct_model_valuations` — core dimension/fact tables.
+- `mart_champion_challenger_disagreement` — champion vs. every challenger's valuation per
+  property, flagged at the same 10% threshold as `GET /api/v1/models/disagreements`.
+- `mart_portfolio_risk_summary` — LTV / AVM variance / audit-status rollup by neighborhood
+  and building type.
+- `mart_revaluation_impact` — per-run aggregate impact of each revaluation cycle.
+- `mart_audit_triage_queue` — every Flagged/Pending Review property with its active assignment.
+
+**Setup:**
+
+```bash
+cd dbt
+pip install -r requirements.txt
+export DBT_PROFILES_DIR="$PWD"   # profiles.yml lives in this directory
+dbt debug   # confirms it can reach Postgres
+dbt run     # builds staging views + mart tables into the `analytics` schema
+dbt test    # runs the schema tests in models/staging/_staging.yml and models/marts/_marts.yml
+```
+
+Defaults in `dbt/profiles.yml` match `docker-compose.yml`'s Postgres (`localhost:5432`,
+db `trident`, user `trident`) — start the stack with `docker compose up --build` first, or
+override any of `POSTGRES_HOST` / `POSTGRES_PORT` / `POSTGRES_USER` / `POSTGRES_PASSWORD` /
+`POSTGRES_DB` / `DBT_SCHEMA` as env vars to point at a different Postgres (e.g. Render).
+
 ## Architecture
 
 ```

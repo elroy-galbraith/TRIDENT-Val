@@ -1,0 +1,56 @@
+version: 2
+
+sources:
+  - name: trident_operational
+    description: >
+      TRIDENT-Val's operational Postgres schema, owned by the FastAPI backend's SQLAlchemy
+      models (backend/app/models.py) and materialized via Base.metadata.create_all — dbt
+      only reads from these tables, it does not manage their schema or migrations.
+    schema: public
+    tables:
+      - name: properties
+        description: Core asset table (Ames housing data) — ground-truth sale price and full model feature vector.
+        columns:
+          - name: pid
+            description: Primary key, property id.
+            tests: [unique, not_null]
+
+      - name: bank_portfolio_meta
+        description: 1:1 with properties — the bank's book of record (booked AVM value, LTV inputs, audit triage state).
+        columns:
+          - name: pid
+            description: Primary key, foreign key to properties.pid.
+            tests: [unique, not_null]
+
+      - name: property_images
+        description: Photo carousel entries per property.
+
+      - name: models
+        description: Model risk inventory — one row per trained artifact under model/<id>/.
+        columns:
+          - name: id
+            description: Primary key, model slug.
+            tests: [unique, not_null]
+
+      - name: model_valuations
+        description: Shadow-scoring ledger — every registered model's valuation for every property.
+
+      - name: revaluation_runs
+        description: One row per periodic revaluation cycle (market-movement scenario applied portfolio-wide).
+        columns:
+          - name: id
+            tests: [unique, not_null]
+
+      - name: revaluation_results
+        description: Per-asset outcome of each revaluation run.
+
+      - name: assignments
+        description: Underwriter work-queue / task tracking on flagged assets.
+
+      - name: users
+        description: Demo auth users (PoC-grade). Only non-sensitive columns are surfaced downstream — password_hash never leaves staging.
+
+      - name: system_logs
+        description: >
+          Unified backend + frontend operational/audit log. Declared as a source for
+          completeness; not currently staged or modeled (high-volume telemetry, not portfolio data).
