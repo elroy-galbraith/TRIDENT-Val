@@ -93,6 +93,7 @@ export const api = {
   generateDocuments: (pids, style, degrade) =>
     send('POST', '/documents/generate', { pids, style, degrade }, 'document generation failed'),
   documents: (params) => get(`/documents?${new URLSearchParams(params)}`),
+  documentPdfUrl: (documentId) => `${BASE}/documents/${documentId}/pdf`,
   runExtraction: (documentId) =>
     send('POST', `/documents/${documentId}/extract`, {}, 'extraction failed'),
   extractionRuns: () => get('/extraction/runs'),

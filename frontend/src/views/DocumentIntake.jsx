@@ -217,7 +217,12 @@ function DocumentList({ refreshKey, canExtract, onExtracted }) {
                         {run?.error ? <span className="text-flag">Failed: {run.error.slice(0, 60)}</span>
                           : run ? `${pct(run.overall_field_accuracy)} accuracy` : '—'}
                       </td>
-                      <td className="py-1.5 flex gap-2">
+                      <td className="py-1.5 flex gap-2 items-center">
+                        <a href={api.documentPdfUrl(d.id)} target="_blank" rel="noopener noreferrer"
+                          onClick={() => logger.track('document-intake', `Viewed synthetic PDF for document ${d.id}.`)}
+                          className="text-xs text-teal hover:underline">
+                          View PDF ↗
+                        </a>
                         {canExtract && (
                           <button onClick={() => extract(d.id)} disabled={extractingId === d.id}
                             className="text-xs bg-ink hover:bg-black text-white px-2 py-1 rounded-sm disabled:opacity-50">

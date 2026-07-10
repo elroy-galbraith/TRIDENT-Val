@@ -1100,6 +1100,21 @@ def list_documents(
             "items": [document_row(d) for d in rows]}
 
 
+@app.get("/api/v1/documents/{document_id}/pdf")
+def get_document_pdf(document_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """Serves the actual generated (possibly degraded) PDF — the only way to see for
+    yourself that Docling is reading a real document, not a mocked-up accuracy number."""
+    doc = db.query(SyntheticDocument).get(document_id)
+    if not doc:
+        raise HTTPException(404, "Synthetic document not found")
+    path = _REPO_ROOT / doc.file_path
+    if not path.is_file():
+        raise HTTPException(404, f"Document file missing on disk: {doc.file_path}")
+    return Response(
+        content=path.read_bytes(), media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="{path.name}"'})
+
+
 @app.post("/api/v1/documents/{document_id}/extract")
 def run_extraction(document_id: int, db: Session = Depends(get_db),
                    user: User = Depends(require_role(UserRole.UNDERWRITER, UserRole.ADMIN))):
