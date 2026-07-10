@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { api } from '../api.js'
-import { Spinner, SourceSystemBadge } from '../components/shared.jsx'
+import { PipelineHealthStrip, Spinner, SourceSystemBadge } from '../components/shared.jsx'
 import { logger } from '../logger.js'
 
 const SOURCES = [
@@ -343,6 +343,7 @@ export default function DataIngestion({ user }) {
           canonical provenance ledger — malformed rows are quarantined with a reason instead of
           silently dropped, and a source can add a new column without breaking anything.
         </p>
+        <div className="mt-3"><PipelineHealthStrip /></div>
         {canSync && (
           <button onClick={() => doSync('all')} disabled={syncingSource !== null}
             className="mt-4 bg-ink hover:bg-black text-white text-sm font-medium px-4 py-2 rounded-sm disabled:opacity-50">

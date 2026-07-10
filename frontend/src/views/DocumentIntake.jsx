@@ -3,7 +3,7 @@ import {
   Bar, BarChart, CartesianGrid, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts'
 import { api, pct } from '../api.js'
-import { Spinner } from '../components/shared.jsx'
+import { Modal, PipelineHealthStrip, Spinner } from '../components/shared.jsx'
 import { logger } from '../logger.js'
 
 function Metric({ label, value, accent }) {
@@ -138,6 +138,7 @@ function DocumentList({ refreshKey, canExtract, onExtracted }) {
   const [runByDoc, setRunByDoc] = useState({})
   const [expanded, setExpanded] = useState(null)
   const [runDetail, setRunDetail] = useState(null)
+  const [viewingPdfId, setViewingPdfId] = useState(null)
 
   useEffect(() => {
     setData(null)
@@ -218,11 +219,13 @@ function DocumentList({ refreshKey, canExtract, onExtracted }) {
                           : run ? `${pct(run.overall_field_accuracy)} accuracy` : '—'}
                       </td>
                       <td className="py-1.5 flex gap-2 items-center">
-                        <a href={api.documentPdfUrl(d.id)} target="_blank" rel="noopener noreferrer"
-                          onClick={() => logger.track('document-intake', `Viewed synthetic PDF for document ${d.id}.`)}
+                        <button onClick={() => {
+                            setViewingPdfId(d.id)
+                            logger.track('document-intake', `Viewed synthetic PDF for document ${d.id}.`)
+                          }}
                           className="text-xs text-teal hover:underline">
-                          View PDF ↗
-                        </a>
+                          View PDF
+                        </button>
                         {canExtract && (
                           <button onClick={() => extract(d.id)} disabled={extractingId === d.id}
                             className="text-xs bg-ink hover:bg-black text-white px-2 py-1 rounded-sm disabled:opacity-50">
@@ -284,6 +287,12 @@ function DocumentList({ refreshKey, canExtract, onExtracted }) {
               className="px-3 py-1 border border-line rounded-sm disabled:opacity-40">Next →</button>
           </div>
         </>
+      )}
+      {viewingPdfId != null && (
+        <Modal title={`Document #${viewingPdfId}`} onClose={() => setViewingPdfId(null)} wide>
+          <iframe src={api.documentPdfUrl(viewingPdfId)} title={`Document ${viewingPdfId} PDF`}
+            className="w-full h-[80vh]" />
+        </Modal>
       )}
     </div>
   )
@@ -412,6 +421,7 @@ export default function DocumentIntake({ user }) {
           can be scored exactly — and low-confidence or wrong fields route to human triage
           instead of being silently trusted.
         </p>
+        <div className="mt-3"><PipelineHealthStrip /></div>
       </div>
 
       <AccuracyDashboard data={accuracy} />

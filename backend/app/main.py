@@ -4,6 +4,7 @@ import os
 import random
 import re
 import sys
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -29,7 +30,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from . import extraction, inference, reports, synthetic_reports
+from . import extraction, inference, narrative, reports, synthetic_reports
 from .auth import DUMMY_PASSWORD_HASH, get_current_user, require_role, verify_password
 from .degrade import degrade_pdf
 from .db import Base, engine, get_db
@@ -67,6 +68,13 @@ app.add_middleware(SessionMiddleware, secret_key=SESSION_SECRET, max_age=60 * 60
 def log_startup():
     Base.metadata.create_all(bind=engine)  # idempotent: only creates system_logs on existing DBs
     logger.info("TRIDENT-Val backend starting up (version {v})", v=app.version)
+
+    # Fire-and-forget: warms Docling's models in the background so the first real extraction
+    # isn't the one paying the (potentially multi-minute) model-download cost. Runs in a
+    # daemon thread so it never blocks app startup, and app.extraction.warm_up() swallows its
+    # own failures (no network, package missing) — this can never crash or delay boot.
+    if os.environ.get("DOCLING_WARMUP_ON_STARTUP", "true").lower() == "true":
+        threading.Thread(target=extraction.warm_up, daemon=True).start()
 
 
 @app.middleware("http")
@@ -291,6 +299,31 @@ def card(p: Property) -> dict:
 @app.get("/api/v1/health")
 def health():
     return {"status": "ok"}
+
+
+VENDOR_API_BASE_URL = os.environ.get("VENDOR_API_BASE_URL", "http://localhost:8001")
+
+
+@app.get("/api/v1/pipeline/health")
+def pipeline_health(user: User = Depends(get_current_user)):
+    """Live status of everything the Data Ingestion / Document Intake demos depend on but
+    can't control from inside this app: the standalone vendor_api service, whether an LLM
+    key is configured for extraction/report narration, and whether Docling is importable and
+    has its models warmed. All best-effort reads — this endpoint itself never fails just
+    because a dependency is down."""
+    try:
+        resp = httpx.get(f"{VENDOR_API_BASE_URL}/health", timeout=3)
+        vendor_api = {"reachable": resp.status_code == 200, "base_url": VENDOR_API_BASE_URL, "error": None}
+    except httpx.HTTPError as e:
+        vendor_api = {"reachable": False, "base_url": VENDOR_API_BASE_URL, "error": str(e)}
+
+    return {
+        "vendor_api": vendor_api,
+        "extraction_llm_configured": extraction.is_llm_configured(),
+        "extraction_llm_model": extraction.EXTRACTION_LLM_MODEL if extraction.is_llm_configured() else None,
+        "report_llm_configured": narrative.is_configured(),
+        "docling": extraction.docling_status(),
+    }
 
 
 @app.post("/api/v1/auth/login")

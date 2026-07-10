@@ -106,6 +106,52 @@ def is_llm_configured() -> bool:
     return bool(EXTRACTION_LLM_API_KEY)
 
 
+# Tracks whether Docling's models have been loaded at least once in this process — surfaced
+# on the pipeline health panel so "first extraction will be slow" is visible ahead of time
+# instead of discovered live. Never set back to False; a later failure doesn't un-warm a
+# process that already has the models cached in memory/on disk.
+_docling_warm = False
+_docling_warm_error: Optional[str] = None
+
+
+def docling_status() -> dict:
+    try:
+        import docling  # noqa: F401
+        importable = True
+        import_error = None
+    except Exception as e:
+        importable = False
+        import_error = str(e)
+    return {"importable": importable, "import_error": import_error,
+           "warm": _docling_warm, "warm_error": _docling_warm_error}
+
+
+def warm_up() -> None:
+    """Best-effort: trigger Docling's model download/initialization now (e.g. at app
+    startup) instead of on the first real extraction request, which is otherwise the slow
+    path (tens of seconds to minutes for the model download). Failures — no network, package
+    missing — are caught and logged, never raised: this is a nice-to-have, not a
+    requirement, and must never affect the app's own boot or availability. Meant to be run
+    in a background thread, not on the request-handling path."""
+    global _docling_warm, _docling_warm_error
+    import tempfile
+
+    from weasyprint import HTML  # already a hard dependency (app.reports); no new import risk
+    try:
+        pdf_bytes = HTML(string="<html><body><p>Docling warm-up document.</p></body></html>").write_pdf()
+        with tempfile.NamedTemporaryFile(suffix=".pdf") as f:
+            f.write(pdf_bytes)
+            f.flush()
+            _docling_convert(f.name)
+        _docling_warm = True
+        _docling_warm_error = None
+        logger.info("Docling models warmed up successfully.")
+    except Exception as e:
+        _docling_warm_error = str(e)
+        logger.warning("Docling warm-up failed (extraction will warm up on first real "
+                       "request instead): {error}", error=str(e))
+
+
 def _docling_convert(file_path: str) -> str:
     """Lazy-imported: docling pulls in torch and downloads layout/OCR models from
     HuggingFace on first DocumentConverter() call. Import failures and conversion failures

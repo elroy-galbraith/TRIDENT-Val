@@ -102,6 +102,7 @@ export const api = {
   extractionTriage: (params) => get(`/extraction/triage?${new URLSearchParams(params)}`),
   resolveExtractionTriage: (id, resolution) =>
     send('POST', `/extraction/triage/${id}/resolve`, { resolution }, 'triage resolution failed'),
+  pipelineHealth: () => get('/pipeline/health'),
 }
 
 export const usd = (n, digits = 0) =>
