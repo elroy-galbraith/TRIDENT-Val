@@ -22,4 +22,5 @@ with rejected alternatives recorded explicitly.
 | 0014 | [Thin work management; no workflow engine](0014-thin-work-management.md) | Accepted |
 | 0015 | [Modular monolith over microservices](0015-modular-monolith.md) | Accepted |
 | 0016 | [Vertical demo before platform refactor](0016-vertical-demo-before-platform-refactor.md) | Accepted |
+| 0017 | [GCP (Cloud Run + Cloud SQL) via Terraform, replacing Render](0017-gcp-cloud-run-terraform-infrastructure.md) | Accepted |
 | 0018 | [Production pipeline hardening — migrations, model monitoring, and in-tenant extraction ahead of ingestion buildout](0018-production-pipeline-hardening.md) | Proposed |
