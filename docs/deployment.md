@@ -158,7 +158,6 @@ see ADR 0017's Consequences section.
 
 ## Decommissioning Render
 
-Once you've confirmed the GCP deployment is serving real traffic and the data in
-Cloud SQL is current, delete the Render services and database from the Render
-dashboard, and remove `render.yaml` from the repo if you don't intend to keep it
-around as a fallback target.
+`render.yaml` has been removed now that the GCP deployment is confirmed live. If you
+haven't already, delete the `trident-val-backend`/`trident-val-frontend` services and
+the `trident-val-db` database from the Render dashboard to stop billing on that side.

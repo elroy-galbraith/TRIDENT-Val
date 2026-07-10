@@ -61,8 +61,7 @@ Production/demo hosting runs on GCP (Cloud Run + Cloud SQL), provisioned by Terr
 in `terraform/` with GitHub Actions CI/CD (`.github/workflows/deploy.yml`) deploying
 on every push to `main`. See [docs/deployment.md](docs/deployment.md) for the full
 setup walkthrough and [ADR 0017](docs/adrs/0017-gcp-cloud-run-terraform-infrastructure.md)
-for the reasoning. `render.yaml` remains for reference but is no longer the primary
-deploy target.
+for the reasoning.
 
 ## Authentication & Roles (PoC-grade)
 
