@@ -1,0 +1,36 @@
+version: 2
+
+models:
+  - name: dim_properties
+    description: One row per property — physical attributes joined to the currently booked bank portfolio state.
+    columns:
+      - name: pid
+        tests: [unique, not_null]
+
+  - name: fct_model_valuations
+    description: Every registered model's valuation for every property, with model status attached.
+    columns:
+      - name: model_valuation_id
+        tests: [unique, not_null]
+
+  - name: mart_champion_challenger_disagreement
+    description: >
+      Champion vs. each challenger's valuation per property, with a material_disagreement
+      flag at the same 10% threshold as the app's own disagreement queue.
+    columns:
+      - name: pid
+        tests: [not_null]
+      - name: champion_model_id
+        tests: [not_null]
+
+  - name: mart_portfolio_risk_summary
+    description: Portfolio risk rollup (LTV, AVM variance, audit status counts) by neighborhood and building type.
+
+  - name: mart_revaluation_impact
+    description: Per-run aggregate impact of each revaluation cycle (value movement, LTV movement, flags raised).
+    columns:
+      - name: run_id
+        tests: [unique, not_null]
+
+  - name: mart_audit_triage_queue
+    description: Every property currently Flagged or Pending Review, joined to its active (non-Done) assignment if any.

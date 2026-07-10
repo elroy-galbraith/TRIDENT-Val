@@ -1,0 +1,25 @@
+select
+    p.pid,
+    p.neighborhood,
+    p.bldg_type,
+    p.house_style,
+    p.ms_zoning,
+    p.year_built,
+    p.overall_qual,
+    p.overall_cond,
+    p.gr_liv_area,
+    p.total_bsmt_sf,
+    p.full_bath,
+    p.half_bath,
+    p.bedroom_abvgr,
+    p.sale_price,
+    p.lat,
+    p.lng,
+    m.current_loan_balance,
+    m.current_avm_value,
+    m.avm_variance_pct,
+    m.ltv,
+    m.audit_status,
+    m.resolved_model_id
+from {{ ref('stg_properties') }} p
+left join {{ ref('stg_bank_portfolio_meta') }} m using (pid)

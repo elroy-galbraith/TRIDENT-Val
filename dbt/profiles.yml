@@ -1,0 +1,18 @@
+# Committed (not in ~/.dbt/) so `dbt` just works against the docker-compose Postgres with
+# zero setup, matching this repo's PoC-grade "defaults are non-secret" pattern (see
+# docker-compose.yml's trident/trident_poc credentials). Point DBT_PROFILES_DIR at this
+# directory, or copy it to ~/.dbt/profiles.yml, before running dbt. Every value is
+# overridable via env var for anyone connecting to a non-default Postgres (e.g. Render).
+trident_val:
+  target: "{{ env_var('DBT_TARGET', 'dev') }}"
+  outputs:
+    dev:
+      type: postgres
+      host: "{{ env_var('POSTGRES_HOST', 'localhost') }}"
+      port: "{{ env_var('POSTGRES_PORT', '5432') | as_number }}"
+      user: "{{ env_var('POSTGRES_USER', 'trident') }}"
+      password: "{{ env_var('POSTGRES_PASSWORD', 'trident_poc') }}"
+      dbname: "{{ env_var('POSTGRES_DB', 'trident') }}"
+      schema: "{{ env_var('DBT_SCHEMA', 'analytics') }}"
+      threads: 4
+      keepalives_idle: 0

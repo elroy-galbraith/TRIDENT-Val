@@ -5,6 +5,11 @@ services:
       POSTGRES_USER: trident
       POSTGRES_PASSWORD: trident_poc
       POSTGRES_DB: trident
+    ports:
+      # Exposed on the host so tools run outside Docker (e.g. dbt, psql) can connect
+      # to postgresql://trident:trident_poc@localhost:${POSTGRES_HOST_PORT:-5432}/trident.
+      # Override POSTGRES_HOST_PORT if a local Postgres already owns 5432.
+      - "${POSTGRES_HOST_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
