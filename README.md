@@ -39,6 +39,27 @@ per property, and three demo user logins (see
 [Authentication & Roles](#authentication--roles-poc-grade) before
 you boot against an existing Postgres volume or `trident.db`.
 
+### Troubleshooting: `ResourceExhausted` / "no space left on device"
+
+This comes from Docker Desktop's own VM disk filling up, not from this repo's images —
+they're small (slim/alpine bases, no ML training at build time). It's almost always
+accumulated build cache and dangling layers from repeated `--build` runs. Reclaim space
+with:
+
+```bash
+docker builder prune -af   # build cache only
+docker system prune -af    # + unused images/containers (does NOT drop volumes)
+docker compose down -v     # also drop this project's own database volume (reseed after)
+```
+
+Avoid adding `--volumes` to `docker system prune` — it drops *every* unused volume on
+the host, not just this project's, which can silently wipe other projects' data too.
+
+If it recurs, raise the disk image size in Docker Desktop under Settings → Resources →
+Advanced. The repo ships `.dockerignore` files (root + `frontend/`) so local-only
+directories like `node_modules`, `.venv`, and `trident.db` are never sent as build
+context in the first place.
+
 ## Quickstart — no Docker (SQLite fallback)
 
 ```bash

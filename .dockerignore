@@ -1,0 +1,40 @@
+# Build context for backend/Dockerfile is the repo root (see docker-compose.yml).
+# Keep local-only/generated artifacts out so they're never tar'd to the Docker
+# daemon or cached in image layers on every `docker compose up --build`.
+#
+# Note: dockerignore patterns are NOT recursive by default (unlike .gitignore) —
+# a bare `*.db` only matches at the context root, so `**/` prefixes are used
+# deliberately below to catch these at any depth.
+
+# VCS
+.git
+.gitignore
+
+# Docs
+**/*.md
+
+# Python
+**/__pycache__/
+**/*.py[cod]
+**/.venv/
+**/venv/
+**/*.egg-info/
+
+# Node / Frontend (completely irrelevant to the backend image — excluding the
+# whole tree means backend builds never even hash the frontend source)
+frontend/
+**/node_modules/
+
+# Local runtime artifacts / secrets
+**/.env
+**/.env.*
+!**/.env.example
+**/*.db
+**/*.sqlite3
+**/nohup.out
+**/logs/
+
+# Editor/OS cruft
+**/.vscode/
+**/.idea/
+**/.DS_Store
