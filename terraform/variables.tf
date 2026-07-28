@@ -146,6 +146,11 @@ variable "budget_amount" {
   description = "Monthly spend threshold (in budget_currency_code) that budget alert thresholds are computed against. Ignored if billing_account_id is blank."
   type        = number
   default     = 50
+
+  validation {
+    condition     = var.budget_amount == floor(var.budget_amount)
+    error_message = "budget_amount must be a whole number; the GCP Billing Budget API accepts only integer currency units."
+  }
 }
 
 variable "budget_currency_code" {
