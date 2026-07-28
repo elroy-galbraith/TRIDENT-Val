@@ -28,6 +28,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
+import yaml
 from sklearn.metrics import mean_absolute_percentage_error, r2_score
 from sklearn.model_selection import train_test_split
 
@@ -123,13 +124,16 @@ def main() -> None:
                           "directly (e.g. an openevolve_output/best/best_program.py)")
     args = ap.parse_args()
 
+    config_iterations = yaml.safe_load((EVOLVE_DIR / "config.yaml").read_text()).get("max_iterations")
+
     if args.code:
         best_code = Path(args.code).read_text()
-        materialize(best_code, evolution_iterations=None)
+        materialize(best_code, evolution_iterations=args.iterations or config_iterations)
         return
 
     from openevolve import run_evolution  # deferred: only needed for a live evolution run
 
+    iterations = args.iterations or config_iterations
     result = run_evolution(
         initial_program=str(EVOLVE_DIR / "initial_program.py"),
         evaluator=str(EVOLVE_DIR / "evaluator.py"),
@@ -143,7 +147,7 @@ def main() -> None:
         raise RuntimeError(
             f"OpenEvolve returned no best program — inspect {args.output}/logs for failures.")
 
-    materialize(result.best_code, evolution_iterations=args.iterations)
+    materialize(result.best_code, evolution_iterations=iterations)
 
 
 if __name__ == "__main__":

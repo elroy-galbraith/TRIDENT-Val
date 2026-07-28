@@ -79,7 +79,10 @@ def prepare(df: pd.DataFrame) -> pd.DataFrame:
 def write_artifact(model_id: str, model, spec: dict, manifest: dict) -> None:
     d = OUT / model_id
     d.mkdir(exist_ok=True)
-    joblib.dump(model, d / "model.joblib")
+    # compress=3: cheap (well under a second) and roughly 3x smaller for larger estimators —
+    # matters once a registered model is an ensemble (e.g. model/evolved_v1's blended
+    # ExtraTrees + HistGradientBoosting + KNN) rather than a single LightGBM booster.
+    joblib.dump(model, d / "model.joblib", compress=3)
     (d / "feature_spec.json").write_text(json.dumps(spec, indent=2))
     (d / "manifest.json").write_text(json.dumps(manifest, indent=2))
     print(f"  -> wrote {d}/{{model.joblib, feature_spec.json, manifest.json}}")

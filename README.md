@@ -1,7 +1,8 @@
 # TRIDENT-Val — Residential Portfolio AVM & Risk Triage Engine (PoC)
 
-End-to-end sandbox per PRD v1.0: a small **model risk inventory** (a LightGBM champion plus a
-Ridge linear challenger, both trained on the Ames Housing Dataset's 2,930 assets), FastAPI
+End-to-end sandbox per PRD v1.0: a small **model risk inventory** — a LightGBM champion, a
+Ridge linear challenger, and an [OpenEvolve](https://github.com/elroy-galbraith/openevolve)-searched
+challenger, all trained/derived from the Ames Housing Dataset's 2,930 assets — a FastAPI
 inference service, PostgreSQL portfolio book, and a multi-view React/Tailwind workbench for
 risk officers and underwriters.
 
@@ -159,7 +160,10 @@ a leaderboard.
     against the Claude Code CLI) searched for rather than one a person hand-picked, using
     `occlusion` explainer (model-agnostic baseline-swap attribution — see
     [Evolving a Challenger](#evolving-a-challenger-openevolve--claude-code-cli) below). A
-    third, independently-derived architecture rather than a restatement of the other two.
+    third, independently-derived architecture rather than a restatement of the other two: a
+    `VotingRegressor` blend of extremely-randomized trees, `HistGradientBoostingRegressor`,
+    and k-nearest-neighbors, arrived at over 15 generations and holding its own against the
+    hand-built champion: holdout MAPE 7.82% vs. the champion's 7.88%, R² tied at 0.9415.
 - **Comparison & disagreement queue** (`GET /api/v1/models/compare`,
   `GET /api/v1/models/disagreements`, surfaced in the frontend's Compare tab): an agreement
   scatter, per-neighborhood MAPE/bias breakdown, and a divergence-ranked queue with a
@@ -193,7 +197,7 @@ against a running app to promote a specific version without a full reseed.
 `model/evolved_v1/` isn't hand-designed — its feature engineering, estimator choice, and
 hyperparameters were searched for by [OpenEvolve](https://github.com/elroy-galbraith/openevolve),
 an LLM-driven evolutionary code search, using the Claude Code CLI as the LLM backend (no API
-key needed — auth is the CLI's own OAuth session). It's a real fourth architecture family in
+key needed — auth is the CLI's own OAuth session). It's a real third architecture family in
 the registry, not a relabeled copy of the champion or linear challenger — see the Model
 Governance section above for why that structural independence is the point.
 
@@ -217,16 +221,19 @@ feature_spec.json, manifest.json}` — the same three-file shape `scripts/train_
 writes — plus `evolved_program.py`, a transparency copy of the exact winning code, so what
 got registered is auditable, not a black box. Because its architecture isn't known in
 advance, it's explained via a new `occlusion` explainer (see Design notes below) rather than
-the champion's native TreeSHAP or the linear challenger's own coefficients.
+the champion's native TreeSHAP or the linear challenger's own coefficients. `write_artifact`
+(shared with `scripts/train_model.py`) joblib-compresses every `model.joblib` — barely
+noticeable for the champion's single booster, but it's what keeps an evolved ensemble (this
+run landed a 3-way blend, ~50MB raw) to a repo-friendly size on disk.
 
 ```bash
-# One-time setup — this is a dev/tooling flow, not a runtime dependency of the app, so it
-# lives in its own venv rather than backend/requirements.txt:
+# One-time setup — this is a dev/tooling flow, so it lives in its own venv rather than
+# folding openevolve into backend/requirements.txt as a runtime dependency of the app:
 python3 -m venv .venv-evolve && source .venv-evolve/bin/activate
-pip install openevolve scikit-learn pandas numpy lightgbm joblib pyyaml
+pip install -r backend/requirements.txt openevolve pyyaml
 npm install -g @anthropic-ai/claude-code && claude login   # if not already installed/authed
 
-# Run the evolution (~15 iterations by default, a few minutes) and register the result:
+# Run the evolution (15 iterations by default, ~10-15 minutes) and register the result:
 python scripts/evolve_challenger.py
 python scripts/seed_db.py   # re-registers all three models and re-scores the portfolio
 ```
