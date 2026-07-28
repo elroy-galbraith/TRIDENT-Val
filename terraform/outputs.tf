@@ -27,3 +27,8 @@ output "workload_identity_provider" {
   description = "Full resource name of the WIF provider — set as the workload_identity_provider input to google-github-actions/auth in CI."
   value       = google_iam_workload_identity_pool_provider.github.name
 }
+
+output "billing_export_dataset_id" {
+  description = "BigQuery dataset to target when enabling the Billing export in the Cloud Billing console (see docs/deployment.md). Null if billing_account_id isn't set."
+  value       = var.billing_account_id != "" ? google_bigquery_dataset.billing_export[0].dataset_id : null
+}

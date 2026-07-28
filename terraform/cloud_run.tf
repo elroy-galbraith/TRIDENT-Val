@@ -4,6 +4,7 @@ resource "google_cloud_run_v2_service" "backend" {
   location            = var.region
   ingress             = "INGRESS_TRAFFIC_ALL"
   deletion_protection = false
+  labels              = merge(local.common_labels, { component = "backend" })
 
   template {
     service_account = google_service_account.backend.email
@@ -134,6 +135,7 @@ resource "google_cloud_run_v2_service" "frontend" {
   location            = var.region
   ingress             = "INGRESS_TRAFFIC_ALL"
   deletion_protection = false
+  labels              = merge(local.common_labels, { component = "frontend" })
 
   template {
     service_account = google_service_account.frontend.email
