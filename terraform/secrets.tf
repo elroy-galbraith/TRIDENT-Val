@@ -32,6 +32,7 @@ resource "google_secret_manager_secret" "this" {
   for_each  = local.secrets
   project   = var.project_id
   secret_id = "${var.app_name}-${each.key}"
+  labels    = merge(local.common_labels, { component = "secrets" })
 
   replication {
     auto {}

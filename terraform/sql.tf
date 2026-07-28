@@ -21,6 +21,7 @@ resource "google_sql_database_instance" "main" {
     tier              = var.db_tier
     availability_type = "ZONAL"
     disk_autoresize   = true
+    user_labels       = merge(local.common_labels, { component = "database" })
     # Current usage is a 10GB minimum-size disk holding ~2.9k demo properties — 20GB is
     # generous headroom while still capping a runaway/looping write from silently
     # growing the disk (and the bill) unbounded.

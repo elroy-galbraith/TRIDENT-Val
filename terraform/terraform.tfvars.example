@@ -8,3 +8,10 @@ github_repository  = "elroy-galbraith/trident-val"
 # narrative disabled; both degrade gracefully (see .env.example at repo root).
 # copilot_provider_api_key    = ""
 # report_llm_provider_api_key = ""
+
+# Optional — leave billing_account_id blank to skip budget alerts and the billing
+# export BigQuery dataset entirely. See docs/deployment.md "Cost & FinOps".
+# billing_account_id              = "XXXXXX-XXXXXX-XXXXXX"
+# budget_amount                   = 50
+# budget_alert_emails             = ["you@example.com"]
+# billing_export_dataset_location = "US"

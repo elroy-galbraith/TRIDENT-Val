@@ -17,6 +17,8 @@ every push to `main`.
   keys, injected into the backend container as env vars.
 - **Workload Identity Federation** — lets GitHub Actions deploy without a stored
   service-account key.
+- **Budget alerts + billing export dataset** (optional, see "Cost & FinOps" below) —
+  spend threshold alerts and a BigQuery destination for GCP's billing export.
 
 ## 0. Prerequisites
 
@@ -155,6 +157,97 @@ Cloud Run and Cloud SQL's `db-f1-micro` tier both have low idle cost (Cloud Run
 scales to zero; the DB instance itself is the main fixed cost, roughly the range of a
 small VM). This is sized to match Render's free tier, not for production load —
 see ADR 0017's Consequences section.
+
+## Cost & FinOps
+
+Terraform manages two FinOps pieces, both gated on setting `billing_account_id` in
+`terraform.tfvars` (find it with `gcloud billing accounts list`):
+
+- **Budget alerts** (`terraform/billing.tf`) — a `google_billing_budget` against
+  `budget_amount` (default $50/month), with alert thresholds at 50%/90%/100% of actual
+  spend plus a 100%-of-*forecasted*-spend rule that fires before the month closes over
+  budget. Billing Account Administrators/Users get notified by default; add more
+  recipients via `budget_alert_emails`.
+- **Billing export destination** — a BigQuery dataset (`billing_export_dataset_location`,
+  default `US`) for GCP's detailed usage cost export. Terraform can provision the
+  dataset but not the export wiring itself — enabling an export is a billing-account
+  action GCP only exposes through the Console, with no Terraform resource or `gcloud`
+  command behind it. That's the manual step below.
+- **Cost-allocation labels** — every billable resource (Cloud Run, Cloud SQL, Artifact
+  Registry, Secret Manager) carries `app`, `managed-by`, and a per-resource `component`
+  label (`terraform/locals.tf`), so the export can be grouped by component without
+  guessing at resource names.
+
+Requires `roles/billing.costsManager` (or `roles/billing.admin`) on the billing account
+for whoever runs `terraform apply` — a separate grant from the project-level roles in
+step 0, since the budget and export dataset both reference the billing account
+directly.
+
+### 1. Enable the billing export
+
+After `terraform apply` has created the dataset, note its ID:
+
+```bash
+terraform output -raw billing_export_dataset_id
+```
+
+Then, in the [Cloud Billing console](https://console.cloud.google.com/billing):
+**Billing → Billing export → Detailed usage cost → Edit settings**, select this
+project's `billing_export_dataset_id`, and save. Also turn on **Pricing export** in the
+same panel — it's what lets you compute *effective* $/vCPU-hour and $/GiB-hour instead
+of hardcoding list prices in queries. Data starts landing within a few hours; there's no
+backfill for days before the export was enabled.
+
+This creates two tables in the dataset: `gcp_billing_export_resource_v1_<BILLING_ACCOUNT_ID>`
+(usage + cost, one row per SKU per resource per day) and `cloud_pricing_export`.
+
+### 2. Build the rightsizing dashboard, not just a cost dashboard
+
+A plain cost dashboard (spend over time, by service) only tells you *what you paid*.
+Rightsizing needs spend compared against how much of what you provisioned actually got
+used — that comparison differs by resource, because Cloud Run and Cloud SQL are billed
+completely differently:
+
+- **Cloud Run bills by actual usage** (vCPU-seconds and GiB-seconds consumed while
+  handling a request, thanks to `cpu_idle = true` in `cloud_run.tf`) — so the billing
+  export's `usage.amount_in_pricing_units` *is* a rightsizing signal on its own. Query it
+  per service per day, divide by request count (join against Cloud Run's request-count
+  metric, or approximate from Cloud Run's own logs) to get vCPU-seconds/request, and
+  compare that against the provisioned ceiling (`backend_cpu`/`backend_memory` in
+  `terraform.tfvars`). Consistently far below the ceiling → shrink the limit; frequently
+  at or above it → that's your `backend_max_instances` headroom being eaten by
+  per-request throttling, not a sizing win.
+- **Cloud SQL bills flat-rate by tier**, so cost alone shows zero signal — a `db-f1-micro`
+  costs the same whether it's at 5% or 95% CPU. Rightsizing it needs actual utilization,
+  which lives in Cloud Monitoring, not the billing export. Two ways to get it into the
+  same dashboard:
+  - Easiest: Console → SQL instance → **Recommendations** tab. GCP's Active Assist
+    recommender already computes tier-rightsizing suggestions from real utilization
+    history — no setup required, just periodic review.
+  - For a unified BigQuery view: schedule `gcloud recommender recommendations list
+    --recommender=google.cloudsql.instance.PerformanceRecommender --project=$PROJECT
+    --location=$REGION --format=json` (e.g. via Cloud Scheduler + a small Cloud
+    Function, or even a cron'd `bq load`) into a companion table in the same dataset,
+    and join it against the cost table by resource name.
+
+Connect [Looker Studio](https://lookerstudio.google.com) to the `gcp_billing_export_resource_v1_*`
+table as a BigQuery data source (start from GCP's built-in **Billing Reports** template
+— Console → Billing → Reports → **Open in Looker Studio** — then extend it) and add:
+
+- A **spend vs. provisioned-limit** table per Cloud Run service — `SUM(cost)` and
+  `SUM(usage.amount_in_pricing_units)` grouped by `resource.name` and the `component`
+  label, next to the static `backend_cpu`/`backend_memory` values from `terraform.tfvars`
+  (enter these as a small manual/Looker Studio parameter table — the export doesn't know
+  your Terraform variables).
+- A **Cloud SQL utilization** chart if you built the recommender-export table, or just a
+  static callout linking to the Console Recommendations tab if you didn't.
+- A trend line of `SUM(cost)` against the `budget_amount` threshold, so the same
+  dashboard answers both "are we about to blow the budget" and "where would trimming
+  actually come from."
+
+Because this is a single-project PoC (see ADR 0017), org-level tooling like Recommender
+Hub's BigQuery export isn't set up here — the `gcloud recommender` polling approach above
+covers the one resource (Cloud SQL) where cost alone can't tell you what to rightsize.
 
 ## Decommissioning Render
 
