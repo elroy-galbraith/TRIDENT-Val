@@ -1,7 +1,8 @@
 # TRIDENT-Val — Residential Portfolio AVM & Risk Triage Engine (PoC)
 
-End-to-end sandbox per PRD v1.0: a small **model risk inventory** (a LightGBM champion plus a
-Ridge linear challenger, both trained on the Ames Housing Dataset's 2,930 assets), FastAPI
+End-to-end sandbox per PRD v1.0: a small **model risk inventory** — a LightGBM champion, a
+Ridge linear challenger, and an [OpenEvolve](https://github.com/elroy-galbraith/openevolve)-searched
+challenger, all trained/derived from the Ames Housing Dataset's 2,930 assets — a FastAPI
 inference service, PostgreSQL portfolio book, and a multi-view React/Tailwind workbench for
 risk officers and underwriters.
 
@@ -26,9 +27,10 @@ docker compose up --build
 - App: http://localhost:8080
 - API docs (Swagger): http://localhost:8000/docs
 
-First boot trains nothing (the fitted models ship in `model/lgbm_v1/` and `model/linear_v1/`)
-and auto-seeds Postgres: 2,930 properties, simulated loan balances at 60–90% of baseline sale
-price, both models registered and shadow-scoring the whole portfolio, variance-based audit
+First boot trains nothing (the fitted models ship in `model/lgbm_v1/`, `model/linear_v1/`,
+and `model/evolved_v1/`) and auto-seeds Postgres: 2,930 properties, simulated loan balances at
+60–90% of baseline sale price, all three models registered and shadow-scoring the whole
+portfolio, variance-based audit
 triage from the champion's valuation, a deterministic multi-photo labeled Unsplash mapping
 per property, and three demo user logins (see
 [Authentication & Roles](#authentication--roles-poc-grade)). Seeding is idempotent.
@@ -144,14 +146,24 @@ a leaderboard.
   every property at seed time — an append-only ledger, never overwritten in place — so
   champion-vs-challenger comparison and the disagreement queue are just queries against
   historical valuations, not live re-inference.
-- **Two genuinely different architectures**, not a version bump, so their disagreement is a
-  real signal: `lgbm_v1` (LightGBM gradient-boosted trees, `tree_shap` explainer — native
-  TreeSHAP via `pred_contrib=True`) and `linear_v1` (Ridge linear regression, `linear_coef`
-  explainer — exact per-feature attribution from the model's own coefficients, mapped back
-  from the one-hot-encoded design matrix to the original feature names). The linear
-  challenger tends to diverge most on high-end and unusual properties — it structurally
-  can't represent the interaction effects the tree model captures — which is exactly what
-  makes its disagreements worth routing to a human rather than averaging away.
+- **Three genuinely different architectures**, not version bumps, so their disagreement is a
+  real signal:
+  - `lgbm_v1` — LightGBM gradient-boosted trees, `tree_shap` explainer (native TreeSHAP via
+    `pred_contrib=True`).
+  - `linear_v1` — Ridge linear regression, `linear_coef` explainer (exact per-feature
+    attribution from the model's own coefficients, mapped back from the one-hot-encoded
+    design matrix to the original feature names). Tends to diverge most on high-end and
+    unusual properties — it structurally can't represent the interaction effects the tree
+    model captures — which is exactly what makes its disagreements worth routing to a human
+    rather than averaging away.
+  - `evolved_v1` — an architecture OpenEvolve (an LLM-driven evolutionary code search, run
+    against the Claude Code CLI) searched for rather than one a person hand-picked, using
+    `occlusion` explainer (model-agnostic baseline-swap attribution — see
+    [Evolving a Challenger](#evolving-a-challenger-openevolve--claude-code-cli) below). A
+    third, independently-derived architecture rather than a restatement of the other two: a
+    `VotingRegressor` blend of extremely-randomized trees, `HistGradientBoostingRegressor`,
+    and k-nearest-neighbors, arrived at over 15 generations and holding its own against the
+    hand-built champion: holdout MAPE 7.82% vs. the champion's 7.88%, R² tied at 0.9415.
 - **Comparison & disagreement queue** (`GET /api/v1/models/compare`,
   `GET /api/v1/models/disagreements`, surfaced in the frontend's Compare tab): an agreement
   scatter, per-neighborhood MAPE/bias breakdown, and a divergence-ranked queue with a
@@ -179,6 +191,59 @@ python scripts/train_model.py   # writes model/lgbm_v1/ and model/linear_v1/, ea
 Retraining alone doesn't change what's booked — rerun `scripts/seed_db.py` afterward to
 re-register the models and re-score the portfolio, or use `POST /models/{model_id}/promote`
 against a running app to promote a specific version without a full reseed.
+
+## Evolving a Challenger (OpenEvolve + Claude Code CLI)
+
+`model/evolved_v1/` isn't hand-designed — its feature engineering, estimator choice, and
+hyperparameters were searched for by [OpenEvolve](https://github.com/elroy-galbraith/openevolve),
+an LLM-driven evolutionary code search, using the Claude Code CLI as the LLM backend (no API
+key needed — auth is the CLI's own OAuth session). It's a real third architecture family in
+the registry, not a relabeled copy of the champion or linear challenger — see the Model
+Governance section above for why that structural independence is the point.
+
+**What's checked in**, under `scripts/evolve/`:
+- `initial_program.py` — the seed program: an `EVOLVE-BLOCK`-wrapped `build_model(...)`
+  function (starts from a bagged extremely-randomized-trees pipeline, a different family
+  from both the champion's boosted trees and the linear challenger).
+- `evaluator.py` — trains each generation's candidate against the *same* Ames holdout split
+  `scripts/train_model.py` uses (same outlier drop, same 80/20 split, same `random_state=42`,
+  same `log1p(SalePrice)` target), so its MAPE/R² is directly comparable to `lgbm_v1`/`linear_v1`.
+- `config.yaml` — `llm.provider: claude_code`, model `sonnet`, plus the system message that
+  constrains the search space (scikit-learn/pandas/numpy only, fixed function signature, no
+  network access) and steers it toward architectures likely to disagree with the other two
+  in useful ways (bagged/randomized trees, non-LightGBM boosting, kernel/distance methods, or
+  small blends of these) rather than a re-derivation of gradient boosting or linear regression.
+
+`scripts/evolve_challenger.py` orchestrates a run end to end: it drives OpenEvolve (via its
+`run_evolution` library API) through `max_iterations` generations, takes the winning program,
+refits it on the training split, and writes `model/evolved_v1/{model.joblib,
+feature_spec.json, manifest.json}` — the same three-file shape `scripts/train_model.py`
+writes — plus `evolved_program.py`, a transparency copy of the exact winning code, so what
+got registered is auditable, not a black box. Because its architecture isn't known in
+advance, it's explained via a new `occlusion` explainer (see Design notes below) rather than
+the champion's native TreeSHAP or the linear challenger's own coefficients. `write_artifact`
+(shared with `scripts/train_model.py`) joblib-compresses every `model.joblib` — barely
+noticeable for the champion's single booster, but it's what keeps an evolved ensemble (this
+run landed a 3-way blend, ~50MB raw) to a repo-friendly size on disk.
+
+```bash
+# One-time setup — this is a dev/tooling flow, so it lives in its own venv rather than
+# folding openevolve into backend/requirements.txt as a runtime dependency of the app:
+python3 -m venv .venv-evolve && source .venv-evolve/bin/activate
+pip install -r backend/requirements.txt openevolve pyyaml
+npm install -g @anthropic-ai/claude-code && claude login   # if not already installed/authed
+
+# Run the evolution (15 iterations by default, ~10-15 minutes) and register the result:
+python scripts/evolve_challenger.py
+python scripts/seed_db.py   # re-registers all three models and re-scores the portfolio
+```
+
+Pass `--iterations N` to shorten/lengthen the search, or `--code path/to/best_program.py` to
+re-materialize an already-evolved program (e.g. from a prior `openevolve_output/best/`)
+without spending LLM calls on a fresh run. Like the champion/linear challenger, evolving a
+new candidate doesn't change what's booked on its own — it registers as a `Challenger`
+(`default_status` in its manifest); promotion is still the separate, deliberate, Admin-only
+act described above.
 
 ## AI Copilot (page-agent)
 
@@ -336,10 +401,17 @@ above (see [Report Export](#report-export-ivs-103--rics-red-book-vps-6)).
 data/ames_raw.csv          De Cock Ames dataset (2,930 rows, zero-scrape ingestion)
 scripts/train_model.py     Trains champion (LightGBM) + challenger (Ridge linear) into
                            model/<id>/{model.joblib, feature_spec.json, manifest.json}
+scripts/evolve/            OpenEvolve search space for the evolved challenger:
+                           initial_program.py (EVOLVE-BLOCK seed), evaluator.py (Ames-holdout
+                           scoring), config.yaml (Claude Code CLI backend) — see Evolving a
+                           Challenger above
+scripts/evolve_challenger.py  Drives OpenEvolve end to end, writes model/evolved_v1/
 scripts/seed_db.py         DB instantiation + model registry + shadow-scoring + image mapping
 model/
   lgbm_v1/                 Champion artifact + manifest (architecture, explainer, metrics)
   linear_v1/               Challenger artifact + manifest
+  evolved_v1/               Challenger artifact + manifest + evolved_program.py (the winning
+                           OpenEvolve-searched source, kept next to the artifact it produced)
 backend/app/
   models.py                properties / bank_portfolio_meta / property_images / system_logs /
                            users / models (registry) / model_valuations (shadow-scoring ledger) /
@@ -420,8 +492,14 @@ All endpoints below require a logged-in session unless noted; ⚑ marks Underwri
   LightGBM uses `pred_contrib=True` for exact TreeSHAP values; the linear challenger uses
   its own fitted coefficients (transformed-column contributions summed back to each
   original feature) — an exact attribution, not an approximation borrowed from a different
-  model family. Both are converted to dollar impact the same way at the prediction point,
-  so champion and challenger drivers are directly comparable.
+  model family. The evolved challenger's architecture isn't fixed in advance, so it gets a
+  third, model-agnostic method instead (`occlusion` in `backend/app/inference.py`): each
+  feature is swapped for a fixed training-time baseline (median for numeric/ordinal, mode
+  for categorical, stored in that model's own `feature_spec.json`) and the resulting shift
+  in the log-space prediction is its contribution — works for any estimator exposing
+  `.predict(X)`, at the cost of one extra prediction pass per feature. All three are
+  converted to dollar impact the same way at the prediction point, so drivers stay directly
+  comparable across the whole registry.
 - **Loan balances** use a seeded RNG (deterministic across rebuilds).
 - **Logging**: the backend (`loguru`) and frontend (`loglevel`) both log in a
   human-readable, timestamped format, and both feed the same `system_logs` table —

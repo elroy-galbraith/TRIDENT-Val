@@ -10,9 +10,14 @@ architecture-agnostic. Explainability is dispatched on manifest["explainer"]:
   - "tree_shap"   - LightGBM's pred_contrib=True returns exact TreeSHAP values natively.
   - "linear_coef" - exact per-feature attribution from a linear model's own coefficients
                     (transformed-column contributions summed back to the original feature).
-Neither is an approximation of the model's own reasoning — both are the model explaining
-itself, just via the mechanics native to its architecture.  Contributions are computed in
-log-price space and converted to approximate dollar impact around the prediction point.
+  - "occlusion"   - model-agnostic baseline occlusion: each feature is swapped for a fixed
+                    reference value (feature_spec.json's "baseline", the median/mode from
+                    that model's own training split) and the resulting prediction shift is
+                    the feature's contribution. Works for any architecture exposing
+                    .predict(X) — the fallback for models whose estimator family isn't one
+                    of the two native paths above (e.g. an evolved sklearn ensemble).
+Contributions are computed in log-price space and converted to approximate dollar impact
+around the prediction point.
 """
 import json
 from functools import lru_cache
@@ -179,6 +184,28 @@ def _linear_contrib(model, spec: dict, X: pd.DataFrame) -> np.ndarray:
     return out
 
 
+def _occlusion_contrib(model, spec: dict, X: pd.DataFrame) -> np.ndarray:
+    """Model-agnostic local attribution: for each feature, replace it with the model's fixed
+    training-time baseline (feature_spec.json["baseline"] — median for numeric/ordinal, mode
+    for categorical) and measure how much the log-space prediction moves. Needs len(features)
+    extra full predict() calls, but places no assumption on the estimator's internals, so it
+    works for any architecture that exposes .predict(X) — the champion/linear models keep
+    their exact native explainers; this is what an evolved/unfamiliar architecture gets.
+    """
+    baseline = spec["baseline"]
+    full_pred = model.predict(X)
+
+    contrib = np.zeros((X.shape[0], len(spec["features"])))
+    for i, f in enumerate(spec["features"]):
+        X_occ = X.copy()
+        if f in spec["categorical"]:
+            X_occ[f] = pd.Categorical([baseline[f]] * len(X), categories=spec["categorical"][f])
+        else:
+            X_occ[f] = baseline[f]
+        contrib[:, i] = full_pred - model.predict(X_occ)
+    return contrib
+
+
 def _contributions(model_id: str, X: pd.DataFrame) -> np.ndarray:
     manifest = get_manifest(model_id)
     model = get_model(model_id)
@@ -187,6 +214,8 @@ def _contributions(model_id: str, X: pd.DataFrame) -> np.ndarray:
         return _tree_shap_contrib(model, X)
     if manifest["explainer"] == "linear_coef":
         return _linear_contrib(model, spec, X)
+    if manifest["explainer"] == "occlusion":
+        return _occlusion_contrib(model, spec, X)
     raise ValueError(f"Unknown explainer type for model {model_id!r}: {manifest['explainer']!r}")
 
 

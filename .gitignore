@@ -4,9 +4,15 @@ __pycache__/
 *.db
 nohup.out
 .venv/
+.venv-evolve/
 /logs/
 .env
 .DS_Store
+
+# OpenEvolve run artifacts (checkpoints/logs/programs db) — scripts/evolve_challenger.py
+# regenerates these; only the materialized model/evolved_v1/ output is committed.
+scripts/evolve/openevolve_output/
+scripts/evolve/_best_program.py
 
 # Terraform
 terraform/.terraform/
