@@ -89,6 +89,12 @@ one mid-phase step, the fork, a failure step, the finale, the compare modal
 overflow, unreadable contrast, fixed-footer overlap. The harness cannot see any
 of these.
 
+Standing chart rules (each earned by a screenshot catch in a real build):
+- An end-anchored axis caption and the last tick label(s) will collide — leave
+  the final tick(s) off any axis that also carries a caption.
+- Columns ranked by magnitude (|divergence|, |error|) get unsigned formatting;
+  a signed formatter there mislabels negative values as positive.
+
 ## Delivery shapes
 
 - **Artifact**: the fragment file itself (starts at `<title>`; no doctype/html/

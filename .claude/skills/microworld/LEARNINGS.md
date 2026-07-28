@@ -7,6 +7,29 @@ references/engine.md and mark it `[promoted]` here.
 
 ---
 
+## 2026-07-28 — disagreement-queue (second build; first via the skill)
+
+**Build-time notes (user signal to be appended after use):**
+- The seeded pitfalls worked: no comment-glob bug, no replace-chain corruption, and the
+  harness passed on the first run. The verification cost dropped from three debug cycles
+  (build 1) to zero.
+- The axis-caption/end-tick collision recurred in a *new* chart form (histogram caption vs
+  right-edge tick labels) — it is evidently a class of bug, not an incident. `[promoted]`
+  into references/engine.md as a standing rule: leave the last tick(s) off any axis that
+  also carries an end-anchored caption.
+- New pitfall: a signed-percent formatter applied to a *magnitude* column (queue ranked by
+  |divergence| displayed "+25.0%" for what was a −25% dissent). Rule: ranking/magnitude
+  columns get unsigned formatting; signed formatting only where direction is the point.
+- Design move that worked again: the previous build's central lesson (selection pressure,
+  error independence) became this build's *payoff act* — the clone-fleet counterfactual
+  directly dramatizes "agreement ≠ accuracy". Sequencing micro-worlds so each one's verdict
+  seeds the next one's tension makes the set teach more than the sum of pages.
+- Mechanism detail worth reusing: when two subsystems compose (triage decision re-deriving
+  audit status through the variance bands), stage the composition as a single visible state
+  cascade in one API response — it landed harder than explaining either net alone.
+
+---
+
 ## 2026-07-28 — automl-openevolve-seeding (first build)
 
 **User-question signal (the best kind):** after using the world, the user asked

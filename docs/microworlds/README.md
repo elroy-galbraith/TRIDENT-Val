@@ -28,3 +28,24 @@ Grounding: registry metrics come from the real `model/*/manifest.json` files, th
 from `scripts/evolve/config.yaml`, and the simple-seed trace ends, line for line, on the actual
 `model/evolved_v1/evolved_program.py` (holdout MAPE 7.82%, R² 0.9415). The AutoML-seeded trace
 is a plausible hypothetical dramatizing the ADR's reasoning, and is labeled as such in the page.
+
+## disagreement-queue.html
+
+Five assets walked through the champion/challenger machinery of ADR 0008 — how a model
+disagreement becomes a logged human decision.
+
+- **Shadow scoring.** The champion books every value; two challengers score the same
+  portfolio in shadow. Each sample asset shows *why* a challenger dissents (linear
+  blindness to interactions, the evolved model's comparables voice, correlated dissent).
+- **The sensitivity dial** — the playable decision: divergence threshold 5% / 10% / 20%
+  (the real ModelCompare options; 10% is `reports.py`'s `DISAGREEMENT_THRESHOLD`). Depth
+  changes; ranking never does.
+- **Triage.** Real request/response shapes for `POST /properties/{pid}/triage-decision`:
+  accept champion, adopt a challenger, manual override — plus the 422 an empty rationale
+  earns, and the audit-status cascade through ADR 0004's variance bands.
+- **The payoff.** Layered nets, the adverse-selection anti-pattern, and a clone-fleet
+  counterfactual showing why disagreement is only a signal when models fail differently.
+
+Grounding: mechanism, endpoints, thresholds, bands, role gates, and log formats are real;
+the five sample assets, portfolio divergence distribution, and error-overlap figures are
+illustrative and labeled as such in the page's briefing.
