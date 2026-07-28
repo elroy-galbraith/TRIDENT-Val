@@ -138,7 +138,7 @@ def main() -> None:
         initial_program=str(EVOLVE_DIR / "initial_program.py"),
         evaluator=str(EVOLVE_DIR / "evaluator.py"),
         config=str(EVOLVE_DIR / "config.yaml"),
-        iterations=args.iterations,
+        iterations=iterations,
         output_dir=args.output,
         cleanup=False,
     )
