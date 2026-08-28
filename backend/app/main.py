@@ -505,6 +505,18 @@ def get_model(model_id: str, db: Session = Depends(get_db), user: User = Depends
     return model_row(m)
 
 
+@app.get("/api/v1/reports/data-profile")
+def data_profile_report(user: User = Depends(require_role(UserRole.ADMIN))):
+    """Static ydata-profiling EDA report over the training data (see
+    scripts/generate_profile_report.py), baked into the image at build time — see ADR 0019.
+    Admin-gated like the Manager dashboard: it exposes full per-feature distributions and
+    sample rows of the underlying data, not something every role needs to see."""
+    path = inference.MODEL_DIR / "data_profile" / "report.html"
+    if not path.exists():
+        raise HTTPException(404, "Data profile report not built for this image")
+    return Response(content=path.read_text(), media_type="text/html")
+
+
 @app.get("/api/v1/portfolio/summary")
 def portfolio_summary(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     exposure, valuation, n = db.query(

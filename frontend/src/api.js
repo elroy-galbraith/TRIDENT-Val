@@ -73,6 +73,7 @@ export const api = {
   compareModels: (params) => get(`/models/compare?${new URLSearchParams(params)}`),
   disagreements: (params) => get(`/models/disagreements?${new URLSearchParams(params)}`),
   assetReportUrl: (pid) => `${BASE}/properties/${pid}/report`,
+  dataProfileReportUrl: `${BASE}/reports/data-profile`,
   portfolioReportUrl: (params) => {
     const qs = params && Object.keys(params).length ? `?${new URLSearchParams(params)}` : ''
     return `${BASE}/portfolio/report${qs}`

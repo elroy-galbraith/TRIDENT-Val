@@ -14,6 +14,10 @@ nohup.out
 scripts/evolve/openevolve_output/
 scripts/evolve/_best_program.py
 
+# ydata-profiling report — baked at Docker build time (see ADR 0019), not tracked in-repo
+# like model/<id>/ artifacts. Run scripts/generate_profile_report.py to produce it locally.
+model/data_profile/
+
 # Terraform
 terraform/.terraform/
 terraform/terraform.tfstate
