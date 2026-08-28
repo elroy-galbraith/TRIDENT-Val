@@ -9,6 +9,7 @@ import ModelCompare from './views/ModelCompare.jsx'
 import RevaluationCycles from './views/RevaluationCycles.jsx'
 import MyQueue from './views/MyQueue.jsx'
 import ManagerDashboard from './views/ManagerDashboard.jsx'
+import DataProfile from './views/DataProfile.jsx'
 import Login from './views/Login.jsx'
 import { Spinner } from './components/shared.jsx'
 import { logger } from './logger.js'
@@ -31,11 +32,13 @@ function tabsForRole(role) {
   const tabs = [...BASE_TABS]
   if (role === 'Underwriter' || role === 'Admin') tabs.push({ id: 'my-queue', label: 'My Queue' })
   if (role === 'Admin') tabs.push({ id: 'manager', label: 'Manager' })
+  if (role === 'Admin') tabs.push({ id: 'data-profile', label: 'Data Profile' })
   return tabs
 }
 
 const VIEW_IDS = new Set([
   'about', 'dashboard', 'portfolio', 'map', 'revaluations', 'model-card', 'compare', 'my-queue', 'manager',
+  'data-profile',
 ])
 
 function stateToPath({ view, pid, gridStatus }) {
@@ -196,6 +199,7 @@ export default function App() {
             {view === 'compare' && <ModelCompare user={user} onOpen={openProperty} />}
             {view === 'my-queue' && <MyQueue user={user} onOpen={openProperty} />}
             {view === 'manager' && <ManagerDashboard onOpen={openProperty} />}
+            {view === 'data-profile' && <DataProfile />}
             {view === 'inspector' && (
               <Inspector pid={pid} user={user} onBack={() => navigate({ view: 'portfolio', pid: null })} onOpen={openProperty} />
             )}

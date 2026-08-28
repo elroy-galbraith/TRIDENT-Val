@@ -24,3 +24,4 @@ with rejected alternatives recorded explicitly.
 | 0016 | [Vertical demo before platform refactor](0016-vertical-demo-before-platform-refactor.md) | Accepted |
 | 0017 | [GCP (Cloud Run + Cloud SQL) via Terraform, replacing Render](0017-gcp-cloud-run-terraform-infrastructure.md) | Accepted |
 | 0018 | [OpenEvolve-searched architecture for the third AVM challenger](0018-openevolve-searched-challenger.md) | Accepted |
+| 0019 | [ydata-profiling for training-data EDA, baked at Docker build time](0019-ydata-profiling-training-data-eda.md) | Accepted |
