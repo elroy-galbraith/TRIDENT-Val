@@ -21,8 +21,9 @@ The report is generated once, at Docker image build time (a `RUN` step in
 `backend/Dockerfile`, after `COPY data`/`COPY scripts`), not at container startup or
 on demand per request:
 - No DB connection is needed — it's the same static Ames CSV `seed_db.py` loads.
-- Keeps the request path free of an expensive computation (~9s locally in `minimal`
-  mode over the full 2,930-row dataset).
+- Keeps the request path free of an expensive computation (~1 minute locally in full
+  mode, including correlations and pairwise interactions, over the full 2,930-row
+  dataset).
 - Follows ADR-0002's precedent: bake data-derived artifacts into the image rather
   than add a job queue or object store this PoC doesn't otherwise need.
 
@@ -33,14 +34,16 @@ Bootstrap/jQuery, which would collide with the app's Tailwind/React DOM if inlin
 directly.
 
 ## Consequences
-- +1 dependency, and a build step that adds report-generation time (single-digit
-  seconds at `minimal=True` / ~2,930 rows) to every image build.
+- +1 dependency, and a build step that adds report-generation time (~1 minute at
+  ~2,930 rows, full mode) to every image build.
 - The report reflects `data/ames_raw.csv` as of that image's build. It does not
   cover properties added at seed time beyond the raw CSV (there are none today), and
   needs a rebuild, not just a redeploy, to refresh after the source data changes.
-- `minimal=True` skips pairwise correlation/interaction matrices to keep build time
-  and report size (~1.7 MB) down; revisit if analysts need deeper interaction
-  analysis.
+- Full mode (correlations + pairwise interactions) is on by default: bivariate
+  relationships are central to EDA, and at this dataset's size the cost (~1 minute
+  build time, ~14 MB report vs. ~9s/~1.7 MB in `minimal` mode) is easily worth it.
+  Revisit toward `minimal=True` only if the dataset grows enough that build time or
+  report size becomes a real problem.
 - Admin-gated because the report exposes full per-feature distributions and sample
   rows of the underlying data — the same sensitivity bar as the Manager dashboard.
 
