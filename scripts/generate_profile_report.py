@@ -36,10 +36,10 @@ def prepared_frame() -> pd.DataFrame:
 def main() -> None:
     OUT.mkdir(parents=True, exist_ok=True)
     df = prepared_frame()
-    # minimal=True skips the expensive pairwise correlation/interaction matrices — this
-    # dataset's per-feature distributions, missingness, and summary stats are the point,
-    # not exhaustive interaction analysis, and it keeps build time to single-digit seconds.
-    report = ProfileReport(df, title="TRIDENT-Val Training Data Profile", minimal=True)
+    # Full mode (correlations + pairwise interactions): ~2,930 rows makes this cheap
+    # (~1 minute, ~14 MB) and bivariate relationships are the point of this page for a
+    # data analyst/scientist doing EDA, not just univariate distributions. See ADR 0019.
+    report = ProfileReport(df, title="TRIDENT-Val Training Data Profile")
     out_path = OUT / "report.html"
     report.to_file(out_path)
     print(f"Wrote data profile report ({out_path.stat().st_size / 1024:.0f} KB) to {out_path}")
