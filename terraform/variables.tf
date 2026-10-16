@@ -1,6 +1,7 @@
 variable "project_id" {
-  description = "GCP project ID to deploy into."
+  description = "GCP project ID to deploy into. Shared with the ATS AVM platform."
   type        = string
+  default     = "ats-avm-jam"
 }
 
 variable "region" {
@@ -61,17 +62,17 @@ variable "db_deletion_protection" {
 
 variable "backend_image" {
   description = <<-EOT
-    Backend container image. Left as the Cloud Run hello-world placeholder on first
-    apply; the GitHub Actions workflow deploys the real image afterwards and
-    Terraform is told to ignore drift on this field (see cloud_run.tf) so it doesn't
-    fight CI/CD deploys.
+    Backend container image for the FIRST apply. The default hello placeholder will
+    fail the backend sidecar's startup probe, so push real images first (see
+    docs/runbooks/deploy-ats-avm-jam.md step 5). CI deploys later images and
+    Terraform ignores image drift (cloud_run.tf).
   EOT
   type        = string
   default     = "us-docker.pkg.dev/cloudrun/container/hello"
 }
 
 variable "frontend_image" {
-  description = "Frontend container image. Same placeholder/ignore_changes treatment as backend_image."
+  description = "Frontend container image. Same first-apply/ignore_changes treatment as backend_image."
   type        = string
   default     = "us-docker.pkg.dev/cloudrun/container/hello"
 }
@@ -83,12 +84,7 @@ variable "backend_cpu" {
 
 variable "backend_memory" {
   type    = string
-  default = "512Mi"
-}
-
-variable "backend_max_instances" {
-  type    = number
-  default = 3
+  default = "1Gi"
 }
 
 variable "frontend_cpu" {
@@ -101,21 +97,45 @@ variable "frontend_memory" {
   default = "256Mi"
 }
 
-variable "frontend_max_instances" {
-  type    = number
-  default = 3
+variable "max_instances" {
+  description = "Cloud Run max instances. Each instance holds a DB connection pool, so keep this small on db-f1-micro."
+  type        = number
+  default     = 2
 }
 
 variable "allow_unauthenticated" {
   description = <<-EOT
-    Grant public (allUsers) invoker access on both Cloud Run services, mirroring the
-    current Render setup where the frontend and backend are both public HTTPS
-    endpoints (the frontend reverse-proxies /api/* to the backend server-side, so
-    browser requests stay same-origin even though the backend URL itself is public).
-    Turn off only if you're ready to also add service-to-service auth.
+    Grant public (allUsers) invoker access. DEFAULT FALSE: the app ships PoC demo
+    credentials and sits in a project that also holds AVM data, so it must not be
+    reachable by the open internet. With false, only principals in invoker_members can
+    call the service (browse via `gcloud run services proxy`, see the runbook).
   EOT
   type        = bool
+  default     = false
+}
+
+variable "invoker_members" {
+  description = "IAM members allowed to call the service when allow_unauthenticated is false, e.g. [\"user:you@example.com\"]."
+  type        = list(string)
+  default     = []
+}
+
+variable "grant_listings_access" {
+  description = "Grant the runtime SA read-only access to the AVM listings dataset (bigquery.jobUser on the project + bigquery.dataViewer on listings_dataset_id). The dataset must already exist."
+  type        = bool
   default     = true
+}
+
+variable "listings_dataset_id" {
+  description = "BigQuery dataset (in project_id) holding listing_observation_raw, owned by the ats_avm stack."
+  type        = string
+  default     = "listings_raw"
+}
+
+variable "backend_extra_env" {
+  description = "Extra NON-secret env vars for the backend container (e.g. config for the /listings explorer). Secrets belong in secrets.tf."
+  type        = map(string)
+  default     = {}
 }
 
 variable "copilot_provider_api_key" {
@@ -130,51 +150,4 @@ variable "report_llm_provider_api_key" {
   type        = string
   default     = ""
   sensitive   = true
-}
-
-variable "billing_account_id" {
-  description = <<-EOT
-    Billing account ID (format XXXXXX-XXXXXX-XXXXXX) linked to project_id — find it
-    with `gcloud billing accounts list`. Gates the whole FinOps module: leave blank to
-    skip creating budget alerts and the billing export BigQuery dataset entirely.
-  EOT
-  type        = string
-  default     = ""
-}
-
-variable "budget_amount" {
-  description = "Monthly spend threshold (in budget_currency_code) that budget alert thresholds are computed against. Ignored if billing_account_id is blank."
-  type        = number
-  default     = 50
-
-  validation {
-    condition     = var.budget_amount == floor(var.budget_amount)
-    error_message = "budget_amount must be a whole number; the GCP Billing Budget API accepts only integer currency units."
-  }
-}
-
-variable "budget_currency_code" {
-  description = "ISO 4217 currency code for budget_amount. Ignored if billing_account_id is blank."
-  type        = string
-  default     = "USD"
-}
-
-variable "budget_alert_emails" {
-  description = <<-EOT
-    Extra email addresses notified at each budget threshold, in addition to the
-    billing account's default Billing Account Administrators/Users. Ignored if
-    billing_account_id is blank.
-  EOT
-  type        = list(string)
-  default     = []
-}
-
-variable "billing_export_dataset_location" {
-  description = <<-EOT
-    BigQuery dataset location for the billing export destination dataset. Must be set
-    before enabling the export in the Cloud Billing console (location can't be changed
-    after data lands) — see docs/deployment.md. Ignored if billing_account_id is blank.
-  EOT
-  type        = string
-  default     = "US"
 }

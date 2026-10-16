@@ -1,7 +1,7 @@
 name: Deploy to Cloud Run
 
-# Builds the backend and frontend images and deploys them to the Cloud Run
-# services Terraform created (see terraform/). Infra changes themselves are
+# Builds the backend and frontend images and deploys them to the single two-container
+# Cloud Run service Terraform created (ats-avm-jam; see docs/runbooks/deploy-ats-avm-jam.md) (see terraform/). Infra changes themselves are
 # applied by hand with `terraform apply` — this workflow only ever swaps the
 # running image, matching the `lifecycle.ignore_changes` on image in
 # terraform/cloud_run.tf so the two don't fight each other.
@@ -80,12 +80,9 @@ jobs:
           cache-to: type=gha,mode=max,scope=${{ matrix.service }}
 
   deploy:
-    name: Deploy (${{ matrix.service }})
+    name: Deploy
     needs: build-and-push
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        service: [backend, frontend]
     steps:
       - id: auth
         uses: google-github-actions/auth@v2
@@ -97,12 +94,8 @@ jobs:
 
       - name: Deploy to Cloud Run
         run: |
-          # Same deterministic tag the build job just pushed — recomputed here
-          # rather than passed as a job output, since matrix job outputs collapse
-          # to whichever leg finishes last and silently drop the others.
-          IMAGE="${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ env.APP_NAME }}/${{ matrix.service }}:${{ github.sha }}"
-          gcloud run deploy "${{ env.APP_NAME }}-${{ matrix.service }}" \
-            --image="${IMAGE}" \
-            --region="${{ vars.GCP_REGION }}" \
-            --project="${{ vars.GCP_PROJECT_ID }}" \
-            --quiet
+          # Same deterministic tags the build jobs just pushed. One service, two
+          # containers (frontend = ingress, backend = sidecar); --container scopes the
+          # following --image to that named container, leaving env/secrets untouched.
+          REPO="${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ env.APP_NAME }}"
+          gcloud run deploy "${{ env.APP_NAME }}"             --region="${{ vars.GCP_REGION }}"             --project="${{ vars.GCP_PROJECT_ID }}"             --container=frontend --image="${REPO}/frontend:${{ github.sha }}"             --container=backend --image="${REPO}/backend:${{ github.sha }}"             --quiet

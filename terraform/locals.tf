@@ -1,6 +1,5 @@
-# Cost-allocation labels applied to every billable resource, so the BigQuery billing
-# export (billing.tf, docs/deployment.md) can be grouped by component without
-# guessing at resource names.
+# Cost-allocation labels applied to every billable resource, so the project-wide
+# billing export (owned by the ats_avm stack) can be filtered to this app by label.
 locals {
   common_labels = {
     app        = var.app_name

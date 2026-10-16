@@ -12,14 +12,13 @@ terraform {
     }
   }
 
-  # Remote state keeps the DB password, session secret, etc. out of anyone's local
-  # machine and lets GitHub Actions plan against the same state. The bucket must
-  # exist before `terraform init` (Terraform can't create the thing it stores state
-  # in) — see docs/deployment.md for the one-time `gcloud storage buckets create`
-  # step, then uncomment this block and run `terraform init -migrate-state`.
-  #
+  # State lives in its OWN bucket, not the ats_avm bucket (ats-avm-jam-tfstate): that
+  # bucket is readable by the AVM data engineer via a project-level objectUser grant,
+  # and this state holds the DB password and session secret in plaintext. The bucket is
+  # created by hand (see docs/runbooks/deploy-ats-avm-jam.md step 2) because Terraform
+  # can't create the bucket that stores its own state.
   backend "gcs" {
-    bucket = "trident-val-tfstate"
+    bucket = "ats-avm-jam-trident-val-tfstate"
     prefix = "terraform/state"
   }
 }
