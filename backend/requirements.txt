@@ -18,6 +18,7 @@ bcrypt>=4.1
 itsdangerous>=2.1
 jinja2>=3.1
 weasyprint>=62
+google-cloud-bigquery>=3.20
 ydata-profiling>=4.12
 # ydata-profiling still imports the legacy pkg_resources API at import time; setuptools 82+
 # dropped it entirely (and its own deprecation warning recommends pinning <81), and

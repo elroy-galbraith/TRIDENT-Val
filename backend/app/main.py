@@ -20,7 +20,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 load_dotenv()  # picks up a repo-root .env for local (non-Docker) runs; no-op if absent
 
-from . import inference, reports
+from . import inference, listings, reports
 from .auth import DUMMY_PASSWORD_HASH, get_current_user, require_role, verify_password
 from .db import Base, engine, get_db
 from .logging_config import setup_logging
@@ -32,6 +32,7 @@ setup_logging()
 
 app = FastAPI(title="TRIDENT-Val AVM & Risk Triage Engine", version="1.0-poc")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+app.include_router(listings.router)  # read-only scraped-listings explorer (BigQuery / NDJSON)
 
 # Signed-cookie session for the PoC login (see app.auth). The frontend never calls the
 # backend cross-origin (Vite/nginx both proxy /api same-origin), so a plain cookie
