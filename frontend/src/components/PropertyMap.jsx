@@ -14,12 +14,17 @@ function radiusScale(value, min, max) {
   return MIN_R + t * (MAX_R - MIN_R)
 }
 
-export default function PropertyMap({ points, center, zoom = 13, height = 480, subjectPid, onOpen }) {
+// Defaults render AVM portfolio points. Listings explorer overrides via `pointStyle` (-> {color, radius,
+// fillOpacity, weight}) and `renderPopup`, and may pass extra react-leaflet layers as children.
+export default function PropertyMap({
+  points, center, zoom = 13, height = 480, subjectPid, onOpen, pointStyle, renderPopup, children,
+}) {
   const { min, max } = useMemo(() => {
     if (!points.length) return { min: 0, max: 0 }
     let minVal = Infinity
     let maxVal = -Infinity
     for (const p of points) {
+      if (p.avm_value == null) continue
       if (p.avm_value < minVal) minVal = p.avm_value
       if (p.avm_value > maxVal) maxVal = p.avm_value
     }
@@ -33,6 +38,16 @@ export default function PropertyMap({ points, center, zoom = 13, height = 480, s
         url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
       />
       {points.map((p) => {
+        if (pointStyle) {
+          const st = pointStyle(p)
+          return (
+            <CircleMarker key={p.pid} center={[p.lat, p.lng]} radius={st.radius ?? 5}
+              pathOptions={{ color: st.stroke ?? st.color, fillColor: st.color,
+                fillOpacity: st.fillOpacity ?? 0.6, weight: st.weight ?? 1 }}>
+              <Popup>{renderPopup?.(p)}</Popup>
+            </CircleMarker>
+          )
+        }
         const tier = ltvTier(p.ltv)
         const isSubject = p.pid === subjectPid
         return (
@@ -73,6 +88,7 @@ export default function PropertyMap({ points, center, zoom = 13, height = 480, s
           </CircleMarker>
         )
       })}
+      {children}
     </MapContainer>
   )
 }
