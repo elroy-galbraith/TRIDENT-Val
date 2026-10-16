@@ -4,18 +4,16 @@ project_id        = "ats-avm-jam"
 region            = "us-central1"
 github_repository = "elroy-galbraith/trident-val"
 
-# Who may open the (non-public) app. Add teammates here.
-invoker_members = ["user:elroy.galbraith@gmail.com"]
-
-# Public access is OFF by default (demo credentials). Do not flip without reading
-# docs/runbooks/deploy-ats-avm-jam.md "Access model".
-# allow_unauthenticated = false
+# Both Cloud Run services are PUBLIC by default, matching the existing TRIDENT-Val
+# deployment (explicit owner decision, ADR 0020). false requires IAM auth, which the
+# frontend's nginx proxy cannot satisfy without extra service-to-service auth work.
+# allow_unauthenticated = true
 
 # Read-only /listings explorer access to BigQuery ats-avm-jam.listings_raw.
 # grant_listings_access = true
 # listings_dataset_id   = "listings_raw"
 
-# Non-secret backend env for the explorer, once its config names are known.
+# Non-secret backend env for the explorer.
 # backend_extra_env = {}
 
 # Optional — blank = AI copilot / AI-drafted report narrative disabled.

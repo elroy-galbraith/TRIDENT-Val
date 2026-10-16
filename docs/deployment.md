@@ -1,11 +1,10 @@
 # Deploying to Google Cloud (replacing Render)
 
 > **Current target:** the terraform/ stack now deploys into the shared `ats-avm-jam`
-> project as one gated, two-container Cloud Run service. Follow
+> project (same two public Cloud Run services, own state bucket, no billing module). Follow
 > [runbooks/deploy-ats-avm-jam.md](runbooks/deploy-ats-avm-jam.md) and
-> [ADR 0020](adrs/0020-deploy-into-ats-avm-jam.md). The walkthrough below describes the
-> original standalone-project layout (two services, billing module) and is out of date
-> where they differ.
+> [ADR 0020](adrs/0020-deploy-into-ats-avm-jam.md); the walkthrough below is the original
+> standalone-project version and is out of date where they differ.
 
 Walkthrough for standing up the GCP infrastructure in `terraform/` and wiring up the
 GitHub Actions pipeline in `.github/workflows/deploy.yml`. See

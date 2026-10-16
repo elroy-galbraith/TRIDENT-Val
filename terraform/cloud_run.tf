@@ -1,69 +1,37 @@
-# One Cloud Run service, two containers (multi-container / sidecar deployment):
-#   frontend (ingress, nginx, serves the SPA and reverse-proxies /api/*)
-#   backend  (FastAPI on localhost:8000, never exposed on its own URL)
-#
-# Why not two services like the original layout: the backend has a login form with PoC
-# demo credentials and must not be public, but an IAM-gated backend service can't be
-# called by nginx without minting ID tokens. Co-locating them means one IAM gate in
-# front of everything, and the frontend still reaches the backend same-origin. See
-# docs/adrs/0020 and docs/runbooks/deploy-ats-avm-jam.md.
-resource "google_cloud_run_v2_service" "app" {
+resource "google_cloud_run_v2_service" "backend" {
   project             = var.project_id
-  name                = var.app_name
+  name                = "${var.app_name}-backend"
   location            = var.region
   ingress             = "INGRESS_TRAFFIC_ALL"
   deletion_protection = false
-  labels              = merge(local.common_labels, { component = "app" })
+  labels              = merge(local.common_labels, { component = "backend" })
 
   template {
-    service_account = google_service_account.runtime.email
+    service_account = google_service_account.backend.email
 
     scaling {
       min_instance_count = 0
-      max_instance_count = var.max_instances
+      max_instance_count = var.backend_max_instances
     }
 
     containers {
-      name  = "frontend"
-      image = var.frontend_image
-
-      ports {
-        container_port = 8080
-      }
-
-      resources {
-        cpu_idle = true
-        limits = {
-          cpu    = var.frontend_cpu
-          memory = var.frontend_memory
-        }
-      }
-
-      # Templated into nginx's /api/* proxy target at container start
-      # (frontend/default.conf.template). Same-instance localhost, plain HTTP.
-      env {
-        name  = "BACKEND_URL"
-        value = "http://localhost:8000"
-      }
-
-      depends_on = ["backend"]
-    }
-
-    containers {
-      name  = "backend"
       image = var.backend_image
 
+      ports {
+        container_port = 8000
+      }
+
       resources {
-        # cpu_idle = true: CPU only while handling a request (scale-to-zero cost).
+        # Explicitly set: setting `resources.limits` at all makes the provider
+        # default cpu_idle to false (CPU always allocated), which needs >=512Mi
+        # and defeats scale-to-zero cost savings. true restores the normal
+        # Cloud Run default (CPU only allocated while handling a request).
         cpu_idle = true
         limits = {
           cpu    = var.backend_cpu
           memory = var.backend_memory
         }
       }
-
-      # PORT is only injected into the ingress container, so the backend CMD falls
-      # back to its default of 8000.
 
       env {
         name = "DATABASE_URL"
@@ -85,8 +53,6 @@ resource "google_cloud_run_v2_service" "app" {
         }
       }
 
-      # The browser reaches the app over https (run.app) or via the local proxy on
-      # localhost, where Chrome/Firefox still accept Secure cookies.
       env {
         name  = "SESSION_COOKIE_SECURE"
         value = "true"
@@ -134,13 +100,12 @@ resource "google_cloud_run_v2_service" "app" {
       }
 
       startup_probe {
-        # CMD runs scripts/wait_and_seed.py before uvicorn binds the port — up to 60s of
-        # DB-connect retries, then (on a fresh DB) a full portfolio seed/shadow-scoring
-        # pass plus bcrypt user hashing. Budget generously; later cold starts succeed
-        # early. The frontend container waits on this probe (depends_on).
+        # CMD runs scripts/wait_and_seed.py before uvicorn ever binds the port — up to 60s
+        # of DB-connect retries, then (on a fresh DB) a full portfolio seed/shadow-scoring
+        # pass plus bcrypt user hashing. Budget generously for that cold-start path; once
+        # seeded, later cold starts return in a couple seconds and the probe succeeds early.
         http_get {
           path = "/api/v1/health"
-          port = 8000
         }
         initial_delay_seconds = 10
         period_seconds        = 10
@@ -157,36 +122,81 @@ resource "google_cloud_run_v2_service" "app" {
     }
   }
 
-  # CI/CD deploys new images with `gcloud run deploy` after this first creates the
-  # service with the hello placeholder; don't let the next apply revert them.
+  # CI/CD (GitHub Actions) deploys new images with `gcloud run deploy` after this
+  # module first creates the service with the hello-world placeholder — Terraform
+  # otherwise reverts every CI deploy back to var.backend_image on the next apply.
   lifecycle {
     ignore_changes = [
       template[0].containers[0].image,
-      template[0].containers[1].image,
     ]
   }
 
   depends_on = [
     google_project_service.apis,
     google_secret_manager_secret_version.this,
-    google_secret_manager_secret_iam_member.backend_access,
   ]
 }
 
-resource "google_cloud_run_v2_service_iam_member" "public" {
+resource "google_cloud_run_v2_service" "frontend" {
+  project             = var.project_id
+  name                = "${var.app_name}-frontend"
+  location            = var.region
+  ingress             = "INGRESS_TRAFFIC_ALL"
+  deletion_protection = false
+  labels              = merge(local.common_labels, { component = "frontend" })
+
+  template {
+    service_account = google_service_account.frontend.email
+
+    scaling {
+      min_instance_count = 0
+      max_instance_count = var.frontend_max_instances
+    }
+
+    containers {
+      image = var.frontend_image
+
+      resources {
+        cpu_idle = true
+        limits = {
+          cpu    = var.frontend_cpu
+          memory = var.frontend_memory
+        }
+      }
+
+      # Templated into nginx's reverse-proxy target for /api/* at container start
+      # (see frontend/default.conf.template) — Cloud Run only knows the backend's
+      # URL after Terraform creates it, so this can't be baked in at build time.
+      env {
+        name  = "BACKEND_URL"
+        value = google_cloud_run_v2_service.backend.uri
+      }
+    }
+  }
+
+  lifecycle {
+    ignore_changes = [
+      template[0].containers[0].image,
+    ]
+  }
+
+  depends_on = [google_project_service.apis]
+}
+
+resource "google_cloud_run_v2_service_iam_member" "backend_public" {
   count    = var.allow_unauthenticated ? 1 : 0
   project  = var.project_id
-  location = google_cloud_run_v2_service.app.location
-  name     = google_cloud_run_v2_service.app.name
+  location = google_cloud_run_v2_service.backend.location
+  name     = google_cloud_run_v2_service.backend.name
   role     = "roles/run.invoker"
   member   = "allUsers"
 }
 
-resource "google_cloud_run_v2_service_iam_member" "invokers" {
-  for_each = var.allow_unauthenticated ? toset([]) : toset(var.invoker_members)
+resource "google_cloud_run_v2_service_iam_member" "frontend_public" {
+  count    = var.allow_unauthenticated ? 1 : 0
   project  = var.project_id
-  location = google_cloud_run_v2_service.app.location
-  name     = google_cloud_run_v2_service.app.name
+  location = google_cloud_run_v2_service.frontend.location
+  name     = google_cloud_run_v2_service.frontend.name
   role     = "roles/run.invoker"
-  member   = each.value
+  member   = "allUsers"
 }

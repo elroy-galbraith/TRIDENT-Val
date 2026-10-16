@@ -25,4 +25,4 @@ with rejected alternatives recorded explicitly.
 | 0017 | [GCP (Cloud Run + Cloud SQL) via Terraform, replacing Render](0017-gcp-cloud-run-terraform-infrastructure.md) | Accepted |
 | 0018 | [OpenEvolve-searched architecture for the third AVM challenger](0018-openevolve-searched-challenger.md) | Accepted |
 | 0019 | [ydata-profiling for training-data EDA, baked at Docker build time](0019-ydata-profiling-training-data-eda.md) | Accepted |
-| 0020 | [Deploy into shared ats-avm-jam: gated, single two-container Cloud Run service](0020-deploy-into-ats-avm-jam.md) | Proposed |
+| 0020 | [Deploy into the shared ats-avm-jam project](0020-deploy-into-ats-avm-jam.md) | Accepted |

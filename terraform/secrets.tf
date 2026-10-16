@@ -57,5 +57,5 @@ resource "google_secret_manager_secret_iam_member" "backend_access" {
   project   = var.project_id
   secret_id = each.value.secret_id
   role      = "roles/secretmanager.secretAccessor"
-  member    = "serviceAccount:${google_service_account.runtime.email}"
+  member    = "serviceAccount:${google_service_account.backend.email}"
 }

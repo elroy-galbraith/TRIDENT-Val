@@ -1,10 +1,11 @@
-output "app_url" {
-  description = "Cloud Run URL of the app. IAM-gated unless allow_unauthenticated = true; use `gcloud run services proxy` to browse it."
-  value       = google_cloud_run_v2_service.app.uri
+output "backend_url" {
+  description = "Public URL of the backend Cloud Run service."
+  value       = google_cloud_run_v2_service.backend.uri
 }
 
-output "service_name" {
-  value = google_cloud_run_v2_service.app.name
+output "frontend_url" {
+  description = "Public URL of the frontend Cloud Run service — this is the app URL."
+  value       = google_cloud_run_v2_service.frontend.uri
 }
 
 output "artifact_registry_repository" {
@@ -17,16 +18,12 @@ output "cloudsql_connection_name" {
   value       = google_sql_database_instance.main.connection_name
 }
 
-output "runtime_service_account_email" {
-  value = google_service_account.runtime.email
-}
-
 output "deployer_service_account_email" {
   description = "Service account GitHub Actions assumes to deploy."
   value       = google_service_account.deployer.email
 }
 
 output "workload_identity_provider" {
-  description = "Full resource name of the WIF provider — set as GCP_WORKLOAD_IDENTITY_PROVIDER in GitHub."
+  description = "Full resource name of the WIF provider — set as the workload_identity_provider input to google-github-actions/auth in CI."
   value       = google_iam_workload_identity_pool_provider.github.name
 }
