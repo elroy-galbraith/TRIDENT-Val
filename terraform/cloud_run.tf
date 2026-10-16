@@ -58,6 +58,14 @@ resource "google_cloud_run_v2_service" "backend" {
         value = "true"
       }
 
+      dynamic "env" {
+        for_each = var.backend_extra_env
+        content {
+          name  = env.key
+          value = env.value
+        }
+      }
+
       # Omitted entirely (rather than pointed at a "latest" version that may not
       # exist yet) when the corresponding tfvar is left blank — see secrets.tf.
       dynamic "env" {

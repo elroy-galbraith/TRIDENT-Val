@@ -1,6 +1,7 @@
 variable "project_id" {
-  description = "GCP project ID to deploy into."
+  description = "GCP project ID to deploy into. Shared with the ATS AVM platform."
   type        = string
+  default     = "ats-avm-jam"
 }
 
 variable "region" {
@@ -132,49 +133,20 @@ variable "report_llm_provider_api_key" {
   sensitive   = true
 }
 
-variable "billing_account_id" {
-  description = <<-EOT
-    Billing account ID (format XXXXXX-XXXXXX-XXXXXX) linked to project_id — find it
-    with `gcloud billing accounts list`. Gates the whole FinOps module: leave blank to
-    skip creating budget alerts and the billing export BigQuery dataset entirely.
-  EOT
+variable "grant_listings_access" {
+  description = "Grant the backend runtime SA read-only access to the AVM listings dataset (bigquery.jobUser on the project + bigquery.dataViewer on listings_dataset_id). The dataset must already exist."
+  type        = bool
+  default     = true
+}
+
+variable "listings_dataset_id" {
+  description = "BigQuery dataset (in project_id) holding listing_observation_raw, owned by the ats_avm stack."
   type        = string
-  default     = ""
+  default     = "listings_raw"
 }
 
-variable "budget_amount" {
-  description = "Monthly spend threshold (in budget_currency_code) that budget alert thresholds are computed against. Ignored if billing_account_id is blank."
-  type        = number
-  default     = 50
-
-  validation {
-    condition     = var.budget_amount == floor(var.budget_amount)
-    error_message = "budget_amount must be a whole number; the GCP Billing Budget API accepts only integer currency units."
-  }
-}
-
-variable "budget_currency_code" {
-  description = "ISO 4217 currency code for budget_amount. Ignored if billing_account_id is blank."
-  type        = string
-  default     = "USD"
-}
-
-variable "budget_alert_emails" {
-  description = <<-EOT
-    Extra email addresses notified at each budget threshold, in addition to the
-    billing account's default Billing Account Administrators/Users. Ignored if
-    billing_account_id is blank.
-  EOT
-  type        = list(string)
-  default     = []
-}
-
-variable "billing_export_dataset_location" {
-  description = <<-EOT
-    BigQuery dataset location for the billing export destination dataset. Must be set
-    before enabling the export in the Cloud Billing console (location can't be changed
-    after data lands) — see docs/deployment.md. Ignored if billing_account_id is blank.
-  EOT
-  type        = string
-  default     = "US"
+variable "backend_extra_env" {
+  description = "Extra NON-secret env vars for the backend container (e.g. config for the /listings explorer). Secrets belong in secrets.tf."
+  type        = map(string)
+  default     = {}
 }

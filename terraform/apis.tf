@@ -1,4 +1,5 @@
-# Every API these resources touch. disable_on_destroy = false so a `terraform
+# Every API these resources touch. Shared project (ats-avm-jam): some of these are
+# already enabled by the AVM platform — enabling an enabled API is a no-op. disable_on_destroy = false so a `terraform
 # destroy` (e.g. tearing down a throwaway demo project) doesn't also disable APIs
 # out from under other things in the same project.
 locals {
@@ -11,8 +12,6 @@ locals {
     "iamcredentials.googleapis.com",
     "sts.googleapis.com",
     "cloudresourcemanager.googleapis.com",
-    "billingbudgets.googleapis.com",
-    "monitoring.googleapis.com",
     "bigquery.googleapis.com",
   ]
 }

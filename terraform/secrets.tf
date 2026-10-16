@@ -17,15 +17,19 @@ locals {
   }
 
   # copilot-provider-api-key and report-llm-provider-api-key are optional and
-  # default to "" — Secret Manager rejects a version with an empty payload, so
+  # default to "" � Secret Manager rejects a version with an empty payload, so
   # skip creating a version until a real value is supplied (via tfvars or
   # `gcloud secrets versions add`). The secret resource itself is still created
   # for every key so IAM access and the Cloud Run secret_key_ref can bind to it.
   #
-  # nonsensitive() here only declassifies "is this key blank?", not the secret
-  # value itself — needed because for_each refuses a set/map whose membership
-  # depends on a sensitive value.
-  secret_version_keys = toset([for k, v in local.secrets : k if nonsensitive(v != "")])
+  # Built from the input variables only (never from local.secrets): database-url
+  # depends on not-yet-created resources, so filtering local.secrets by value makes
+  # for_each unknown at plan time and a first apply from empty state fails.
+  secret_version_keys = toset(concat(
+    ["database-url", "session-secret"],
+    nonsensitive(var.copilot_provider_api_key != "") ? ["copilot-provider-api-key"] : [],
+    nonsensitive(var.report_llm_provider_api_key != "") ? ["report-llm-provider-api-key"] : [],
+  ))
 }
 
 resource "google_secret_manager_secret" "this" {
