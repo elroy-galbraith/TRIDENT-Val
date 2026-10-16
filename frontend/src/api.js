@@ -86,6 +86,8 @@ export const api = {
   listingsSummary: () => get('/listings/summary'),
   listingsFilters: () => get('/listings/filters'),
   listings: (params) => get(`/listings?${new URLSearchParams(params)}`),
+  listingsDistributions: (params = {}) => get(`/listings/distributions?${new URLSearchParams(params)}`),
+  listingsGeo: (params = {}) => get(`/listings/geo?${new URLSearchParams(params)}`),
   listing: (id) => get(`/listings/${encodeURIComponent(id)}`),
   users: () => get('/users'),
   assignments: (params) => get(`/assignments?${new URLSearchParams(params)}`),

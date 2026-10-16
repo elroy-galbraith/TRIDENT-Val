@@ -15,6 +15,8 @@ export function CoverageBanner() {
 const SUBTABS = [
   { id: 'listings-quality', label: 'Quality overview' },
   { id: 'listings', label: 'Listings grid' },
+  { id: 'listings-distributions', label: 'Distributions' },
+  { id: 'listings-map', label: 'Map' },
 ]
 
 export function ListingsShell({ view, onNavigate, children }) {

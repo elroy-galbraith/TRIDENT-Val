@@ -12,6 +12,8 @@ import ManagerDashboard from './views/ManagerDashboard.jsx'
 import DataProfile from './views/DataProfile.jsx'
 import ListingsQuality from './views/ListingsQuality.jsx'
 import ListingsGrid from './views/ListingsGrid.jsx'
+import ListingsDistributions from './views/ListingsDistributions.jsx'
+import ListingsMap from './views/ListingsMap.jsx'
 import ListingInspector from './views/ListingInspector.jsx'
 import { ListingsShell } from './components/ListingsShell.jsx'
 import Login from './views/Login.jsx'
@@ -43,8 +45,10 @@ function tabsForRole(role) {
 
 const VIEW_IDS = new Set([
   'about', 'dashboard', 'portfolio', 'map', 'revaluations', 'model-card', 'compare', 'my-queue', 'manager',
-  'data-profile', 'listings', 'listings-quality',
+  'data-profile', 'listings', 'listings-quality', 'listings-distributions', 'listings-map',
 ])
+
+const LISTINGS_VIEWS = new Set(['listings-quality', 'listings', 'listings-distributions', 'listings-map'])
 
 function stateToPath({ view, pid, gridStatus }) {
   if (view === 'listing' && pid != null) return `/listing/${encodeURIComponent(pid)}`
@@ -162,7 +166,7 @@ export default function App() {
                 <button key={t.id} onClick={() => openTab(t.id)}
                   className={`px-4 py-1.5 text-sm rounded-sm transition-colors ${
                     view === t.id || (t.id === 'portfolio' && view === 'inspector')
-                      || (t.id === 'listings-quality' && (view === 'listings' || view === 'listing'))
+                      || (t.id === 'listings-quality' && (LISTINGS_VIEWS.has(view) || view === 'listing'))
                       ? 'bg-white/15 text-white' : 'text-white/70 hover:text-white'}`}>
                   {t.label}
                 </button>
@@ -209,13 +213,23 @@ export default function App() {
             {view === 'my-queue' && <MyQueue user={user} onOpen={openProperty} />}
             {view === 'manager' && <ManagerDashboard onOpen={openProperty} />}
             {view === 'data-profile' && <DataProfile />}
-            {(view === 'listings-quality' || view === 'listings') && (
+            {LISTINGS_VIEWS.has(view) && (
               <ListingsShell view={view} onNavigate={(id) => { if (id === 'listings') setListingFilters({}); openTab(id) }}>
                 {view === 'listings-quality' && (
                   <ListingsQuality onFilter={(f) => { setListingFilters(f); openTab('listings') }} />
                 )}
+                {view === 'listings-distributions' && (
+                  <ListingsDistributions
+                    onFilter={(f) => { setListingFilters(f); openTab('listings') }}
+                    onOpen={(id) => navigate({ view: 'listing', pid: id })} />
+                )}
+                {view === 'listings-map' && (
+                  <ListingsMap initialFilters={listingFilters}
+                    onOpen={(id) => navigate({ view: 'listing', pid: id })} />
+                )}
                 {view === 'listings' && (
                   <ListingsGrid key={JSON.stringify(listingFilters)} initialFilters={listingFilters}
+                    onMap={(f) => { setListingFilters(f); openTab('listings-map') }}
                     onOpen={(id) => navigate({ view: 'listing', pid: id })} />
                 )}
               </ListingsShell>

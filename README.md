@@ -407,6 +407,20 @@ predictions are deliberately not shown.
   date. Bars and fill rows click through to the grid, pre-filtered.
 - **Listings grid** — paginated cards, filters (parish, property/listing type, currency, parse
   status, geo precision, scrape run, "missing field"), search and sort.
+- **Distributions** — log-binned histograms (computed server-side) of asking price (one chart per
+  currency), floor area and lot size (one per unit), price per floor-area unit (only `sqft`/`sqm`
+  rows, labelled, never converted or mixed), plus bedrooms. Outliers are flagged per currency/unit
+  facet with an IQR rule on log10 values (mild beyond 1.5 x IQR, extreme beyond 3 x IQR; facets with
+  fewer than 8 rows are not fenced) and link to the record inspector. A property type x listing type
+  heat table makes the mix obvious (only ~20% are houses) and clicks through to the grid.
+- **Map** — pins coloured by property type or by price quartile (within each currency), filters
+  (parish, types, currency, geo precision/source; "Show on map" on the grid carries its filters
+  over). A side panel lists suspicious geometry: pins outside Jamaica's bounding box (with a
+  swapped-lat/lon / lost-sign hint) and clusters of different MLS refs sharing identical
+  coordinates (centroid fallbacks).
+- **Repeat observations** — the same MLS ref can appear in several scrape runs. Distributions and
+  the map default to "latest observation per MLS ref" (`latest_only=true`) so they are not
+  double-counted; untick it to see every row.
 - **Record inspector** — raw vs parsed fields side by side with a parse status per field,
   provenance (listing/canonical URL, `snapshot_uri`, `parser_version`, `http_status`, run id),
   quality flags, and the image carousel (hotlinked from the source CDN; no images are stored).
@@ -415,7 +429,7 @@ Every Listings view carries a coverage banner: the data is a single-site crawl o
 the market only (price-descending, ~540 of ~7,600 listings), and prices are asking prices,
 so distributions must not be read as the whole market.
 
-**Data source** (`backend/app/listings.py`, endpoints under `/api/v1/listings`; any logged-in role):
+**Data source** (`backend/app/listings.py`, endpoints under `/api/v1/listings`: `summary`, `filters`, `distributions`, `geo`, the grid list and `/{record_id}`; all read-only GETs, any logged-in role; `distributions`/`geo` accept the grid filters):
 
 | Env var | Default | Meaning |
 |---|---|---|
