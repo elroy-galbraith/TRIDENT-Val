@@ -123,6 +123,35 @@ class User(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
+class ListingFlag(Base):
+    """A reviewer's "this field was parsed wrong" note on a scraped listing observation.
+
+    The ONLY write path of the Listings explorer, and it lives in the app DB: nothing is ever
+    written back to BigQuery/GCS. `record_id` is the observation id (per scrape run), so
+    `site_listing_ref` is kept alongside to find the same listing in other runs. Raw/parsed
+    values are snapshotted at flag time so the flag stays meaningful if the table is reloaded.
+    Exported as CSV so open flags can be turned into parser fixes.
+    """
+    __tablename__ = "listing_flags"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    record_id = Column(String(128), index=True, nullable=False)
+    site_listing_ref = Column(String(128), index=True, nullable=True)
+    scrape_run_id = Column(String(128), nullable=True)
+    field = Column(String(64), index=True, nullable=False)     # e.g. "Floor area"
+    reason = Column(String(32), index=True, nullable=False)    # see listing_flags.REASONS
+    note = Column(Text, default="")
+    expected_value = Column(String(256), nullable=True)        # what the parser should have produced
+    raw_value = Column(Text, nullable=True)                    # snapshot: raw scraped text
+    parsed_value = Column(Text, nullable=True)                 # snapshot: parser output
+    status = Column(String(16), default="open", index=True, nullable=False)  # open | resolved
+    created_by = Column(String(64), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    resolved_by = Column(String(64), nullable=True)
+    resolved_at = Column(DateTime(timezone=True), nullable=True)
+    resolution_note = Column(Text, nullable=True)
+
+
 class RegisteredModel(Base):
     """Model risk inventory entry — one row per trained artifact under model/<id>/.
 

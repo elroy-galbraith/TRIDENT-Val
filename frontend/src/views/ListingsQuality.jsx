@@ -25,10 +25,14 @@ function Bars({ title, rows, onPick, max = 12 }) {
   )
 }
 
-export default function ListingsQuality({ onFilter }) {
+export default function ListingsQuality({ onFilter, onFlags }) {
   const [s, setS] = useState(null)
+  const [fl, setFl] = useState(null)
   const [err, setErr] = useState(null)
-  useEffect(() => { api.listingsSummary().then(setS).catch((e) => setErr(e.message)) }, [])
+  useEffect(() => {
+    api.listingsSummary().then(setS).catch((e) => setErr(e.message))
+    api.listingFlagsSummary().then(setFl).catch(() => setFl(null))
+  }, [])
   if (err) return <div className="card p-4 text-sm text-flag">Could not load listings: {err}</div>
   if (!s) return <Spinner label="Loading listings quality…" />
 
@@ -46,6 +50,12 @@ export default function ListingsQuality({ onFilter }) {
           <span>Parse errors: <b className="figure">{s.quality_flags.with_parse_errors}</b></span>
           <span>Missing required: <b className="figure">{s.quality_flags.with_missing_required}</b></span>
           <span>Marked duplicate: <b className="figure">{s.quality_flags.marked_duplicate}</b></span>
+          {fl && (
+            <button onClick={onFlags} className="text-teal hover:underline" title="Reviewer-flagged bad parses">
+              Flagged as bad parse: <b className="figure">{fl.open}</b> open{fl.open > 0 ? ` on ${fl.open_listings} listing${fl.open_listings === 1 ? '' : 's'}` : ''}
+              {fl.resolved > 0 ? ` · ${fl.resolved} resolved` : ''}
+            </button>
+          )}
         </div>
       </div>
 
