@@ -395,6 +395,42 @@ this cycle refilled, with an AI-drafted executive summary — same IVS 103 / Red
 `.disclosure-box`, and LLM-narrates-never-computes guarantee as the asset/portfolio reports
 above (see [Report Export](#report-export-ivs-103--rics-red-book-vps-6)).
 
+## Listings Explorer (scraped Jamaican listings, read-only)
+
+A **Listings** tab for validating the scraped cbjamaica.com data that will eventually feed the
+AVM. It is strictly read-only and independent of the models, triage and portfolio data. Model
+predictions are deliberately not shown.
+
+- **Quality overview** — fill rate per field, parser gaps (raw text present but parsed value
+  missing), `amount_parse_status` / currency / `geo_source` / `geo_precision` / parish /
+  property-type counts, property type x listing type, and rows per `scrape_run_id` and fetch
+  date. Bars and fill rows click through to the grid, pre-filtered.
+- **Listings grid** — paginated cards, filters (parish, property/listing type, currency, parse
+  status, geo precision, scrape run, "missing field"), search and sort.
+- **Record inspector** — raw vs parsed fields side by side with a parse status per field,
+  provenance (listing/canonical URL, `snapshot_uri`, `parser_version`, `http_status`, run id),
+  quality flags, and the image carousel (hotlinked from the source CDN; no images are stored).
+
+Every Listings view carries a coverage banner: the data is a single-site crawl of the top of
+the market only (price-descending, ~540 of ~7,600 listings), and prices are asking prices,
+so distributions must not be read as the whole market.
+
+**Data source** (`backend/app/listings.py`, endpoints under `/api/v1/listings`; any logged-in role):
+
+| Env var | Default | Meaning |
+|---|---|---|
+| `LISTINGS_NDJSON_PATH` | unset | If set, read local NDJSON (a file, or a directory of `*.ndjson`) instead of BigQuery. Use this offline. |
+| `LISTINGS_BQ_PROJECT` | `ats-avm-jam` | Billing/job project for the query (must not be the gcloud default). |
+| `LISTINGS_BQ_TABLE` | `ats-avm-jam.listings_raw.listing_observation_raw` | Table to read. |
+| `LISTINGS_CACHE_TTL` | `300` | Seconds the loaded rows are cached in memory. |
+
+BigQuery uses Application Default Credentials (`gcloud auth application-default login`). The
+whole table (a few hundred rows) is loaded once with a plain `SELECT *` and cached, so the first
+request after startup takes several seconds. To run offline, pull the raw batches with
+`gcloud storage cp "gs://ats-avm-jam-listings-raw/batches/cbjamaica/*.ndjson" ./listings/` and set
+`LISTINGS_NDJSON_PATH=./listings` (rows are de-duplicated by `record_id`). Tests:
+`cd backend && python -m pytest tests`.
+
 ## Architecture
 
 ```

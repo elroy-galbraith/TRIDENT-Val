@@ -10,6 +10,10 @@ import RevaluationCycles from './views/RevaluationCycles.jsx'
 import MyQueue from './views/MyQueue.jsx'
 import ManagerDashboard from './views/ManagerDashboard.jsx'
 import DataProfile from './views/DataProfile.jsx'
+import ListingsQuality from './views/ListingsQuality.jsx'
+import ListingsGrid from './views/ListingsGrid.jsx'
+import ListingInspector from './views/ListingInspector.jsx'
+import { ListingsShell } from './components/ListingsShell.jsx'
 import Login from './views/Login.jsx'
 import { Spinner } from './components/shared.jsx'
 import { logger } from './logger.js'
@@ -24,6 +28,7 @@ const BASE_TABS = [
   { id: 'revaluations', label: 'Revaluation Cycles' },
   { id: 'model-card', label: 'Model Card' },
   { id: 'compare', label: 'Compare' },
+  { id: 'listings-quality', label: 'Listings' },
 ]
 
 // Assignable roles (Underwriter, Admin) get "My Queue"; only Admin (the manager role in this
@@ -38,10 +43,11 @@ function tabsForRole(role) {
 
 const VIEW_IDS = new Set([
   'about', 'dashboard', 'portfolio', 'map', 'revaluations', 'model-card', 'compare', 'my-queue', 'manager',
-  'data-profile',
+  'data-profile', 'listings', 'listings-quality',
 ])
 
 function stateToPath({ view, pid, gridStatus }) {
+  if (view === 'listing' && pid != null) return `/listing/${encodeURIComponent(pid)}`
   if (view === 'inspector' && pid != null) return `/inspector/${encodeURIComponent(pid)}`
   if (view === 'portfolio' && gridStatus) return `/portfolio?status=${encodeURIComponent(gridStatus)}`
   return `/${view}`
@@ -50,6 +56,7 @@ function stateToPath({ view, pid, gridStatus }) {
 function stateFromLocation() {
   const segments = window.location.pathname.split('/').filter(Boolean)
   const [head, arg] = segments
+  if (head === 'listing' && arg) return { view: 'listing', pid: decodeURIComponent(arg), gridStatus: '' }
   if (head === 'inspector' && arg) return { view: 'inspector', pid: decodeURIComponent(arg), gridStatus: '' }
   if (VIEW_IDS.has(head)) {
     const status = head === 'portfolio' ? new URLSearchParams(window.location.search).get('status') || '' : ''
@@ -60,6 +67,7 @@ function stateFromLocation() {
 
 export default function App() {
   const [{ view, pid, gridStatus }, setNavState] = useState(stateFromLocation)
+  const [listingFilters, setListingFilters] = useState({})
   const [copilotOpen, setCopilotOpen] = useState(true)
   const copilotRef = useRef(null)
   // undefined = checking for an existing session, null = logged out, object = logged in
@@ -154,6 +162,7 @@ export default function App() {
                 <button key={t.id} onClick={() => openTab(t.id)}
                   className={`px-4 py-1.5 text-sm rounded-sm transition-colors ${
                     view === t.id || (t.id === 'portfolio' && view === 'inspector')
+                      || (t.id === 'listings-quality' && (view === 'listings' || view === 'listing'))
                       ? 'bg-white/15 text-white' : 'text-white/70 hover:text-white'}`}>
                   {t.label}
                 </button>
@@ -200,6 +209,22 @@ export default function App() {
             {view === 'my-queue' && <MyQueue user={user} onOpen={openProperty} />}
             {view === 'manager' && <ManagerDashboard onOpen={openProperty} />}
             {view === 'data-profile' && <DataProfile />}
+            {(view === 'listings-quality' || view === 'listings') && (
+              <ListingsShell view={view} onNavigate={(id) => { if (id === 'listings') setListingFilters({}); openTab(id) }}>
+                {view === 'listings-quality' && (
+                  <ListingsQuality onFilter={(f) => { setListingFilters(f); openTab('listings') }} />
+                )}
+                {view === 'listings' && (
+                  <ListingsGrid key={JSON.stringify(listingFilters)} initialFilters={listingFilters}
+                    onOpen={(id) => navigate({ view: 'listing', pid: id })} />
+                )}
+              </ListingsShell>
+            )}
+            {view === 'listing' && (
+              <ListingsShell view="listings" onNavigate={openTab}>
+                <ListingInspector recordId={pid} onBack={() => navigate({ view: 'listings', pid: null })} />
+              </ListingsShell>
+            )}
             {view === 'inspector' && (
               <Inspector pid={pid} user={user} onBack={() => navigate({ view: 'portfolio', pid: null })} onOpen={openProperty} />
             )}
