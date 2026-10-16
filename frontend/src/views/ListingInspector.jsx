@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react'
 import { api } from '../api.js'
 import { Carousel, FALLBACK_IMG, Spinner } from '../components/shared.jsx'
 import { fmtPrice } from '../components/ListingsShell.jsx'
+import { REASON_LABEL } from './ListingsFlags.jsx'
 
 const statusStyle = {
   parsed: 'bg-ok/10 text-ok border-ok/30',
@@ -21,8 +22,50 @@ function Link({ href }) {
     : <span className="figure break-all" title="Private GCS object (not browser-openable)">{href}</span>
 }
 
-export default function ListingInspector({ recordId, onBack }) {
+function FlagForm({ recordId, row, reasons, onDone, onCancel }) {
+  const [reason, setReason] = useState(row.status === 'unparsed' ? 'not_parsed' : 'wrong_value')
+  const [note, setNote] = useState('')
+  const [expected, setExpected] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState(null)
+  const submit = async () => {
+    setBusy(true); setErr(null)
+    try {
+      await api.createListingFlag({ record_id: recordId, field: row.field, reason, note, expected_value: expected || null })
+      onDone()
+    } catch (e) { setErr(e.message); setBusy(false) }
+  }
+  const inp = 'border border-line rounded-sm px-2 py-1 bg-white text-sm'
+  return (
+    <div className="bg-amber/10 border border-amber/40 rounded-sm p-3 space-y-2">
+      <div className="text-sm font-medium">Flag “{row.field}” as a bad parse
+        <span className="text-xs text-inkmute font-normal"> · raw {String(row.raw ?? '—')} → parsed {String(row.parsed ?? '—')}</span></div>
+      <div className="flex flex-wrap gap-2 items-center">
+        <select className={inp} value={reason} onChange={(e) => setReason(e.target.value)}>
+          {reasons.map((r) => <option key={r} value={r}>{REASON_LABEL[r] || r}</option>)}
+        </select>
+        <input className={`${inp} w-48`} placeholder="Expected value (optional)" value={expected}
+          onChange={(e) => setExpected(e.target.value)} maxLength={256} />
+        <input className={`${inp} flex-1 min-w-[12rem]`} placeholder="Note — what is wrong?" value={note}
+          onChange={(e) => setNote(e.target.value)} maxLength={2000} />
+      </div>
+      <div className="flex items-center gap-3 text-sm">
+        <button disabled={busy} onClick={submit} className="px-3 py-1 bg-teal text-white rounded-sm disabled:opacity-50">Submit flag</button>
+        <button onClick={onCancel} className="text-inkmute hover:underline">Cancel</button>
+        {err && <span className="text-flag text-xs">{err}</span>}
+      </div>
+    </div>
+  )
+}
+
+export default function ListingInspector({ recordId, onBack, user, onOpen }) {
   const [d, setD] = useState(null)
+  const [flags, setFlags] = useState([])
+  const [reasons, setReasons] = useState([])
+  const [flagging, setFlagging] = useState(null)
+  const canFlag = user && user.role !== 'Viewer'
+  const loadFlags = () => api.listingFlags({ record_id: recordId, status: 'open' }).then((x) => setFlags(x.items)).catch(() => setFlags([]))
+  useEffect(() => { setFlagging(null); loadFlags(); api.listingFlagsMeta().then((m) => setReasons(m.reasons)).catch(() => {}) }, [recordId])
   const [err, setErr] = useState(null)
   const [photo, setPhoto] = useState(0)
   useEffect(() => { setD(null); api.listing(recordId).then(setD).catch((e) => setErr(e.message)) }, [recordId])
@@ -61,19 +104,43 @@ export default function ListingInspector({ recordId, onBack }) {
           <div className="label mb-2">Parsed vs raw</div>
           <table className="w-full text-sm">
             <thead className="text-inkmute text-xs text-left">
-              <tr><th className="py-1 w-32">Field</th><th>Raw (as scraped)</th><th>Parsed</th><th className="w-32">Status</th></tr>
+              <tr><th className="py-1 w-32">Field</th><th>Raw (as scraped)</th><th>Parsed</th><th className="w-32">Status</th><th className="w-16">Flag</th></tr>
             </thead>
             <tbody>
-              {d.comparison.map((c) => (
-                <tr key={c.field} className="border-t border-line align-top">
-                  <td className="py-1.5 font-medium">{c.field}</td>
-                  <td className="figure text-xs break-words max-w-[16rem]">{show(c.raw)}</td>
-                  <td className="figure text-xs">{show(c.parsed)}{c.parsed != null && c.extra ? ` ${c.extra}` : ''}</td>
-                  <td><span className={`inline-block px-2 py-0.5 text-[11px] border rounded-sm ${statusStyle[c.status]}`}>{statusText[c.status]}</span></td>
-                </tr>
-              ))}
+              {d.comparison.map((c) => {
+                const open = flags.filter((x) => x.field === c.field)
+                return (
+                  <React.Fragment key={c.field}>
+                    <tr className="border-t border-line align-top">
+                      <td className="py-1.5 font-medium">{c.field}</td>
+                      <td className="figure text-xs break-words max-w-[16rem]">{show(c.raw)}</td>
+                      <td className="figure text-xs">{show(c.parsed)}{c.parsed != null && c.extra ? ` ${c.extra}` : ''}</td>
+                      <td><span className={`inline-block px-2 py-0.5 text-[11px] border rounded-sm ${statusStyle[c.status]}`}>{statusText[c.status]}</span></td>
+                      <td className="text-xs whitespace-nowrap">
+                        {canFlag && (
+                          <button onClick={() => setFlagging(flagging === c.field ? null : c.field)} title="Flag this field as a bad parse"
+                            aria-label={`Flag ${c.field} as a bad parse`} className="text-flag hover:bg-flag/10 rounded-sm px-1.5">⚑</button>
+                        )}
+                        {open.length > 0 && <span className="text-flag font-medium" title={open.map((x) => `#${x.id} ${REASON_LABEL[x.reason] || x.reason}: ${x.note || ''}`).join('; ')}> {open.length}</span>}
+                      </td>
+                    </tr>
+                    {flagging === c.field && (
+                      <tr><td colSpan={5} className="pb-2">
+                        <FlagForm recordId={recordId} row={c} reasons={reasons}
+                          onCancel={() => setFlagging(null)} onDone={() => { setFlagging(null); loadFlags() }} />
+                      </td></tr>
+                    )}
+                  </React.Fragment>
+                )
+              })}
             </tbody>
           </table>
+          {flags.length > 0 && (
+            <div className="mt-3 text-xs border border-flag/30 bg-flag/5 rounded-sm p-2">
+              <b className="text-flag">{flags.length} open bad-parse flag{flags.length === 1 ? '' : 's'}</b> on this observation:{' '}
+              {flags.map((x) => `${x.field} (${REASON_LABEL[x.reason] || x.reason}, ${x.created_by})`).join(' · ')}
+            </div>
+          )}
           {r.attributes?.features_raw?.length > 0 && (
             <div className="mt-3 text-xs text-inkmute">Features: {r.attributes.features_raw.join(' · ')}</div>
           )}
@@ -90,6 +157,20 @@ export default function ListingInspector({ recordId, onBack }) {
               <div className="flex gap-2"><dt className="w-32 text-inkmute flex-none">raw_payload_uri</dt><dd><Link href={p.raw_payload_uri} /></dd></div>
             </dl>
           </div>
+          {d.other_observations?.length > 0 && (
+            <div className="card p-5">
+              <div className="label mb-2">Same listing in other runs ({d.other_observations.length})</div>
+              <ul className="text-xs space-y-1">
+                {d.other_observations.map((o) => (
+                  <li key={o.record_id}>
+                    <button className="text-teal hover:underline figure text-left" onClick={() => onOpen?.(o.record_id)}>
+                      {(o.fetched_at || '').slice(0, 16).replace('T', ' ')} · {o.scrape_run_id}
+                    </button> · {fmtPrice(o.amount, o.currency)}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
           <div className="card p-5">
             <div className="label mb-2">Quality flags</div>
             <dl className="text-xs space-y-1">

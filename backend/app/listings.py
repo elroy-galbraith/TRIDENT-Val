@@ -679,13 +679,183 @@ def listings_geo(f: dict = Depends(_filters), min_cluster: int = Query(CLUSTER_M
     }
 
 
+# ---------- run comparison ----------
+
+# (label, section, key) compared between the two observations of the same listing.
+DIFF_FIELDS = [
+    ("Price", "price", "amount"),
+    ("Currency", "price", "currency"),
+    ("Status", "listing", "listing_status_raw"),
+    ("Listing type", "listing", "listing_type_raw"),
+    ("Property type", "attributes", "property_type_raw"),
+    ("Title", "listing", "title"),
+    ("Bedrooms", "attributes", "bedrooms"),
+    ("Bathrooms", "attributes", "bathrooms"),
+    ("Floor area", "attributes", "floor_area"),
+    ("Floor area unit", "attributes", "floor_area_unit"),
+    ("Lot size", "attributes", "lot_size"),
+    ("Lot size unit", "attributes", "lot_size_unit"),
+    ("Year built", "attributes", "year_built_raw"),
+    ("Condition", "attributes", "condition_raw"),
+    ("Parish", "location", "parish_raw"),
+    ("Community", "location", "community"),
+    ("Latitude", "location", "latitude"),
+    ("Longitude", "location", "longitude"),
+    ("Listed at", "listing", "listed_at"),
+    ("Agent", "agent", "agent_name_raw"),
+    ("Agency", "agent", "agency_name_raw"),
+]
+DIFF_LIST_CAP = 1000
+
+
+def _listing_key(r: dict) -> Optional[str]:
+    """Identity of a listing across runs. record_id is per observation, so it can't be used."""
+    return _g(r, "provenance", "site_listing_ref") or _g(r, "provenance", "canonical_url")
+
+
+def _run_index(rows: list[dict], run_id: str) -> tuple[dict[str, dict], int]:
+    """{listing key: latest observation} for one run, and how many rows had no usable key."""
+    idx: dict[str, dict] = {}
+    unkeyed = 0
+    for r in rows:
+        if _g(r, "provenance", "scrape_run_id") != run_id:
+            continue
+        k = _listing_key(r)
+        if not k:
+            unkeyed += 1
+            continue
+        cur = idx.get(k)
+        if cur is None or str(_g(r, "provenance", "fetched_at") or "") >= str(_g(cur, "provenance", "fetched_at") or ""):
+            idx[k] = r
+    return idx, unkeyed
+
+
+def _same(a: Any, b: Any) -> bool:
+    if not _present(a) and not _present(b):
+        return True
+    if isinstance(a, (int, float)) and isinstance(b, (int, float)) and not isinstance(a, bool):
+        return math.isclose(a, b, rel_tol=1e-9, abs_tol=1e-9)
+    return a == b
+
+
+def diff_runs(rows: list[dict], run_a: str, run_b: str) -> dict:
+    """Pure diff of two scrape runs, keyed by site_listing_ref (canonical_url fallback)."""
+    ia, unkeyed_a = _run_index(rows, run_a)
+    ib, unkeyed_b = _run_index(rows, run_b)
+    only_a = [_list_item(ia[k]) for k in sorted(ia.keys() - ib.keys())]
+    only_b = [_list_item(ib[k]) for k in sorted(ib.keys() - ia.keys())]
+    both_keys = sorted(ia.keys() & ib.keys())
+
+    changed, unchanged = [], 0
+    field_counts: Counter = Counter()
+    parser_changed = 0
+    for k in both_keys:
+        a, b = ia[k], ib[k]
+        changes = [{"field": lab, "before": _g(a, s, key), "after": _g(b, s, key)}
+                   for lab, s, key in DIFF_FIELDS if not _same(_g(a, s, key), _g(b, s, key))]
+        pv = (_g(a, "provenance", "parser_version"), _g(b, "provenance", "parser_version"))
+        parser_changed += pv[0] != pv[1]
+        if not changes:
+            unchanged += 1
+            continue
+        for c in changes:
+            field_counts[c["field"]] += 1
+        ca, cb = _list_item(a), _list_item(b)
+        changed.append({"key": k, "title": cb["title"] or ca["title"],
+                        "record_id_a": ca["record_id"], "record_id_b": cb["record_id"],
+                        "fetched_at_a": ca["fetched_at"], "fetched_at_b": cb["fetched_at"],
+                        "parser_version_a": pv[0], "parser_version_b": pv[1],
+                        "parser_version_changed": pv[0] != pv[1], "changes": changes})
+    return {
+        "run_a": run_a, "run_b": run_b,
+        "counts": {"a": len(ia), "b": len(ib), "only_a": len(only_a), "only_b": len(only_b),
+                   "both": len(both_keys), "both_changed": len(changed), "both_unchanged": unchanged,
+                   "unkeyed_a": unkeyed_a, "unkeyed_b": unkeyed_b,
+                   "parser_version_differs": parser_changed},
+        "field_change_counts": [{"field": f, "count": n} for f, n in field_counts.most_common()],
+        "only_a": only_a[:DIFF_LIST_CAP], "only_b": only_b[:DIFF_LIST_CAP],
+        "changed": changed[:DIFF_LIST_CAP],
+        "truncated": any(n > DIFF_LIST_CAP for n in (len(only_a), len(only_b), len(changed))),
+        "compared_fields": [lab for lab, _, _ in DIFF_FIELDS],
+    }
+
+
+def run_overview(rows: list[dict]) -> dict:
+    """Which scrape runs exist and how much the same listing recurs across them."""
+    per_run: dict[str, dict] = {}
+    runs_of: dict[str, set] = defaultdict(set)
+    for r in rows:
+        rid = _g(r, "provenance", "scrape_run_id")
+        if not rid:
+            continue
+        f = _g(r, "provenance", "fetched_at")
+        e = per_run.setdefault(rid, {"scrape_run_id": rid, "observations": 0, "first_fetched_at": f,
+                                     "last_fetched_at": f, "parser_versions": set()})
+        e["observations"] += 1
+        e["parser_versions"].add(_label(_g(r, "provenance", "parser_version")))
+        if f:
+            if not e["first_fetched_at"] or str(f) < str(e["first_fetched_at"]):
+                e["first_fetched_at"] = f
+            if not e["last_fetched_at"] or str(f) > str(e["last_fetched_at"]):
+                e["last_fetched_at"] = f
+        k = _listing_key(r)
+        if k:
+            runs_of[k].add(rid)
+    for e in per_run.values():
+        e["listings"] = sum(1 for s in runs_of.values() if e["scrape_run_id"] in s)
+        e["parser_versions"] = sorted(e["parser_versions"])
+    runs = sorted(per_run.values(), key=lambda e: (str(e["first_fetched_at"]), e["scrape_run_id"]))
+    ids = [e["scrape_run_id"] for e in runs]
+    pairs = []
+    for i, a in enumerate(ids):
+        for b in ids[i + 1:]:
+            n = sum(1 for s in runs_of.values() if a in s and b in s)
+            pairs.append({"run_a": a, "run_b": b, "shared": n})
+    hist = Counter(len(s) for s in runs_of.values())
+    multi = sum(n for k, n in hist.items() if k > 1)
+    best = max(pairs, key=lambda p: p["shared"], default=None)
+    return {
+        "coverage_note": COVERAGE_NOTE, "source": _cache["source"], "runs": runs,
+        "distinct_listings": len(runs_of), "observations": len(rows),
+        "listings_in_multiple_runs": multi,
+        "listings_by_run_count": [{"runs": k, "listings": n} for k, n in sorted(hist.items())],
+        "pair_overlap": pairs,
+        "best_pair": best if best and best["shared"] else None,
+        "comparable": multi > 0,
+    }
+
+
+@router.get("/runs")
+def listings_runs():
+    """Scrape runs, per-run listing counts and cross-run overlap (is a run diff even meaningful?)."""
+    return run_overview(_rows())
+
+
+@router.get("/runs/diff")
+def listings_run_diff(run_a: str, run_b: str):
+    """Listings only in A, only in B, in both — and field-level before/after for those in both."""
+    rows = _rows()
+    known = {_g(r, "provenance", "scrape_run_id") for r in rows}
+    for rid in (run_a, run_b):
+        if rid not in known:
+            raise HTTPException(404, f"Unknown scrape run {rid!r}")
+    if run_a == run_b:
+        raise HTTPException(422, "Pick two different runs")
+    return {"coverage_note": COVERAGE_NOTE, **diff_runs(rows, run_a, run_b)}
+
+
 @router.get("/{record_id}")
 def get_listing(record_id: str):
     for r in _rows():
         if r["record"]["record_id"] == record_id:
             imgs = sorted(r.get("images") or [], key=lambda i: i.get("order_index") or 0)
+            key = _listing_key(r)
+            others = [_list_item(o) for o in _rows()
+                      if key and _listing_key(o) == key and o is not r]
             return {
                 "coverage_note": COVERAGE_NOTE,
+                "other_observations": [{k: o[k] for k in ("record_id", "scrape_run_id", "fetched_at", "amount", "currency")}
+                                       for o in sorted(others, key=lambda o: str(o["fetched_at"]))],
                 "record": r,
                 "summary": _list_item(r),
                 "comparison": _comparison(r),

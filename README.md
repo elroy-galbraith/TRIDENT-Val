@@ -398,8 +398,10 @@ above (see [Report Export](#report-export-ivs-103--rics-red-book-vps-6)).
 ## Listings Explorer (scraped Jamaican listings, read-only)
 
 A **Listings** tab for validating the scraped cbjamaica.com data that will eventually feed the
-AVM. It is strictly read-only and independent of the models, triage and portfolio data. Model
-predictions are deliberately not shown.
+AVM. The listings table itself is strictly read-only (nothing is ever written to BigQuery or GCS) and
+the explorer is independent of the models, triage and portfolio data. Model predictions are
+deliberately not shown. The one write path is reviewer **bad-parse flags**, stored in this app's own
+database (see below).
 
 - **Quality overview** — fill rate per field, parser gaps (raw text present but parsed value
   missing), `amount_parse_status` / currency / `geo_source` / `geo_precision` / parish /
@@ -424,12 +426,29 @@ predictions are deliberately not shown.
 - **Record inspector** — raw vs parsed fields side by side with a parse status per field,
   provenance (listing/canonical URL, `snapshot_uri`, `parser_version`, `http_status`, run id),
   quality flags, and the image carousel (hotlinked from the source CDN; no images are stored).
+- **Run comparison** — lists the scrape runs and how much the same listing recurs across them
+  (listings are keyed by `site_listing_ref`, falling back to `canonical_url`; `record_id` is per
+  observation so it is not used), then diffs any two runs: listings only in A, only in B, in both,
+  and for those in both a field-level before/after (price, currency, status, type, bedrooms,
+  bathrooms, floor area/lot size + units, location, agent, ...). Differences between observations
+  parsed by different `parser_version`s are marked, since they may be parser changes rather than
+  site changes. If the runs don't overlap (or only one run exists) the tab says so instead of
+  showing an empty diff. API: `GET /api/v1/listings/runs`, `GET /api/v1/listings/runs/diff?run_a=&run_b=`.
+- **Bad-parse flags** — in the record inspector each raw-vs-parsed row has a flag button (⚑): pick a
+  reason (wrong value / not parsed / wrong unit / wrong currency / wrong category / other), an
+  optional expected value and note; the user and time come from the session, and the raw/parsed
+  values are snapshotted. Any non-Viewer can flag; only Admin resolves or deletes. The **Flags**
+  tab lists flags with status/field/reason filters and a CSV export (for turning open flags into
+  parser fixes), and the Quality overview shows the open-flag count. Flags live in the app DB
+  (`listing_flags` table, created by the usual `create_all`; SQLite or Postgres) and every write is
+  audit-logged with the actor. API under `/api/v1/listings/flags` (`GET`, `POST`,
+  `PATCH /{id}/resolve`, `DELETE /{id}`, `GET /summary`, `GET /meta`, `GET /export.csv`).
 
 Every Listings view carries a coverage banner: the data is a single-site crawl of the top of
 the market only (price-descending, ~540 of ~7,600 listings), and prices are asking prices,
 so distributions must not be read as the whole market.
 
-**Data source** (`backend/app/listings.py`, endpoints under `/api/v1/listings`: `summary`, `filters`, `distributions`, `geo`, the grid list and `/{record_id}`; all read-only GETs, any logged-in role; `distributions`/`geo` accept the grid filters):
+**Data source** (`backend/app/listings.py`, endpoints under `/api/v1/listings`: `summary`, `filters`, `distributions`, `geo`, `runs`, `runs/diff`, the grid list and `/{record_id}`; all read-only GETs, any logged-in role (the only writes are the flag endpoints above); `distributions`/`geo` accept the grid filters):
 
 | Env var | Default | Meaning |
 |---|---|---|
