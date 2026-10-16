@@ -35,7 +35,7 @@ function Card({ it, onOpen }) {
   )
 }
 
-export default function ListingsGrid({ onOpen, initialFilters }) {
+export default function ListingsGrid({ onOpen, onMap, initialFilters }) {
   const [opts, setOpts] = useState(null)
   const [filters, setFilters] = useState({ search: '', sort: 'price_desc', ...initialFilters })
   const [page, setPage] = useState(1)
@@ -77,8 +77,13 @@ export default function ListingsGrid({ onOpen, initialFilters }) {
           <button onClick={() => { setPage(1); setFilters({ search: '', sort: filters.sort }) }}
             className="px-3 py-1.5 border border-line rounded-sm text-sm bg-white hover:border-teal">Clear filters</button>
         )}
+        {onMap && (
+          <button onClick={() => onMap(filters)} className="px-3 py-1.5 border border-line rounded-sm text-sm bg-white hover:border-teal ml-auto">
+            Show on map
+          </button>
+        )}
         <select value={filters.sort} onChange={set('sort')} aria-label="Sort listings"
-          className="border border-line rounded-sm px-2 py-1.5 text-sm bg-white ml-auto">
+          className="border border-line rounded-sm px-2 py-1.5 text-sm bg-white">
           {Object.entries(SORTS).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
         </select>
       </div>

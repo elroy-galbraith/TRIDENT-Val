@@ -20,6 +20,7 @@ Config (env):
 import datetime as dt
 import decimal
 import json
+import math
 import os
 import re
 import threading
@@ -367,10 +368,7 @@ def listings_filters():
     }
 
 
-@router.get("")
-def list_listings(
-    page: int = Query(1, ge=1),
-    page_size: int = Query(24, ge=1, le=200),
+def _filters(
     search: Optional[str] = None,
     parish: Optional[str] = None,
     property_type: Optional[str] = None,
@@ -382,43 +380,79 @@ def list_listings(
     missing_field: Optional[str] = Query(None, description="Only rows where this field (e.g. attributes.bedrooms) is empty"),
     min_price: Optional[float] = None,
     max_price: Optional[float] = None,
-    sort: str = "price_desc",
-):
-    if sort not in SORTS:
-        raise HTTPException(422, f"sort must be one of {list(SORTS)}")
+    latest_only: bool = Query(False, description="Keep only the latest observation per site_listing_ref"),
+) -> dict:
+    """Grid filters as a dependency, shared by the grid, distributions and map endpoints."""
+    if missing_field and not any(f == missing_field for f, _, _ in FILL_FIELDS):
+        raise HTTPException(422, f"Unknown missing_field {missing_field!r}")
+    return dict(search=search, parish=parish, property_type=property_type, listing_type=listing_type,
+                currency=currency, amount_parse_status=amount_parse_status, geo_precision=geo_precision,
+                scrape_run_id=scrape_run_id, missing_field=missing_field,
+                min_price=min_price, max_price=max_price, latest_only=latest_only)
+
+
+def _matching(f: dict) -> list[dict]:
+    """Raw rows passing the filters (the `search` needle is checked on title/community/ref/id)."""
     missing = None
-    if missing_field:
-        missing = next(((s, k) for f, s, k in FILL_FIELDS if f == missing_field), None)
-        if missing is None:
-            raise HTTPException(422, f"Unknown missing_field {missing_field!r}")
+    if f["missing_field"]:
+        missing = next((s, k) for lab, s, k in FILL_FIELDS if lab == f["missing_field"])
 
     def eq(r, sec, key, want):
         return want is None or str(_g(r, sec, key)) == want
 
-    needle = search.lower() if search else None
-    items = []
+    needle = f["search"].lower() if f["search"] else None
+    out = []
     for r in _rows():
-        if not (eq(r, "location", "parish_raw", parish)
-                and eq(r, "attributes", "property_type_raw", property_type)
-                and eq(r, "listing", "listing_type_raw", listing_type)
-                and eq(r, "price", "currency", currency)
-                and eq(r, "price", "amount_parse_status", amount_parse_status)
-                and eq(r, "location", "geo_precision", geo_precision)
-                and eq(r, "provenance", "scrape_run_id", scrape_run_id)):
+        if not (eq(r, "location", "parish_raw", f["parish"])
+                and eq(r, "attributes", "property_type_raw", f["property_type"])
+                and eq(r, "listing", "listing_type_raw", f["listing_type"])
+                and eq(r, "price", "currency", f["currency"])
+                and eq(r, "price", "amount_parse_status", f["amount_parse_status"])
+                and eq(r, "location", "geo_precision", f["geo_precision"])
+                and eq(r, "provenance", "scrape_run_id", f["scrape_run_id"])):
             continue
         if missing and _present(_g(r, *missing)):
             continue
         amt = _g(r, "price", "amount")
-        if min_price is not None and (amt is None or amt < min_price):
+        if f["min_price"] is not None and (amt is None or amt < f["min_price"]):
             continue
-        if max_price is not None and (amt is None or amt > max_price):
+        if f["max_price"] is not None and (amt is None or amt > f["max_price"]):
             continue
-        item = _list_item(r)
-        if needle and needle not in " ".join(str(item[k] or "") for k in
-                                             ("title", "community", "site_listing_ref", "record_id")).lower():
+        if needle and needle not in " ".join(
+                str(x or "") for x in (_g(r, "listing", "title"), _g(r, "location", "community"),
+                                       _g(r, "provenance", "site_listing_ref"),
+                                       r["record"]["record_id"])).lower():
             continue
-        items.append(item)
+        out.append(r)
+    if f.get("latest_only"):
+        out = _latest_per_ref(out)
+    return out
 
+
+def _latest_per_ref(rows: list[dict]) -> list[dict]:
+    """One row per site_listing_ref (the most recently fetched); rows with no ref are kept as-is."""
+    best: dict[str, dict] = {}
+    for r in rows:
+        ref = _g(r, "provenance", "site_listing_ref")
+        if not ref:
+            continue
+        cur = best.get(ref)
+        if cur is None or str(_g(r, "provenance", "fetched_at") or "") > str(_g(cur, "provenance", "fetched_at") or ""):
+            best[ref] = r
+    return [r for r in rows if not _g(r, "provenance", "site_listing_ref")
+            or best[_g(r, "provenance", "site_listing_ref")] is r]
+
+
+@router.get("")
+def list_listings(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(24, ge=1, le=200),
+    f: dict = Depends(_filters),
+    sort: str = "price_desc",
+):
+    if sort not in SORTS:
+        raise HTTPException(422, f"sort must be one of {list(SORTS)}")
+    items = [_list_item(r) for r in _matching(f)]
     key, desc = SORTS[sort]
     have = [i for i in items if key(i) is not None]
     lack = [i for i in items if key(i) is None]
@@ -428,6 +462,221 @@ def list_listings(
     start = (page - 1) * page_size
     return {"total": total, "page": page, "page_size": page_size,
             "coverage_note": COVERAGE_NOTE, "items": items[start:start + page_size]}
+
+
+# ---------- distributions ----------
+
+OUTLIER_MIN_N = 8       # don't fence facets smaller than this
+OUTLIER_K = 1.5         # Tukey fence multiplier on log10 values
+EXTREME_K = 3.0         # beyond this the outlier is "extreme"
+N_BINS = 20
+# Price per area is only shown for these units; anything else is skipped rather than guessed at.
+COMPARABLE_AREA_UNITS = {"sqft", "sqm"}
+
+
+def _quantile(sorted_vals: list[float], q: float) -> float:
+    pos = q * (len(sorted_vals) - 1)
+    lo = int(pos)
+    hi = min(lo + 1, len(sorted_vals) - 1)
+    return sorted_vals[lo] + (sorted_vals[hi] - sorted_vals[lo]) * (pos - lo)
+
+
+def _log_bins(vals: list[float], n_bins: int = N_BINS) -> list[dict]:
+    """Equal-width bins on log10(value); values must be > 0."""
+    logs = [math.log10(v) for v in vals]
+    lo, hi = min(logs), max(logs)
+    if hi == lo:
+        return [{"lo": vals[0], "hi": vals[0], "count": len(vals)}]
+    w = (hi - lo) / n_bins
+    counts = [0] * n_bins
+    for x in logs:
+        counts[min(n_bins - 1, int((x - lo) / w))] += 1
+    return [{"lo": 10 ** (lo + i * w), "hi": 10 ** (lo + (i + 1) * w), "count": c}
+            for i, c in enumerate(counts)]
+
+
+def _fences(vals: list[float]) -> Optional[dict]:
+    """Tukey fences on log10 values, returned on the original scale."""
+    if len(vals) < OUTLIER_MIN_N:
+        return None
+    logs = sorted(math.log10(v) for v in vals)
+    q1, q3 = _quantile(logs, 0.25), _quantile(logs, 0.75)
+    iqr = q3 - q1
+    return {"q1": 10 ** q1, "q3": 10 ** q3,
+            "low": 10 ** (q1 - OUTLIER_K * iqr), "high": 10 ** (q3 + OUTLIER_K * iqr),
+            "low_extreme": 10 ** (q1 - EXTREME_K * iqr), "high_extreme": 10 ** (q3 + EXTREME_K * iqr)}
+
+
+def _num(v: Any) -> Optional[float]:
+    return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+
+
+def _facet(metric: str, label: str, facet: str, unit: Optional[str],
+           pairs: list[tuple[dict, float]], outliers: list[dict]) -> dict:
+    """pairs = (row, value). Appends flagged rows to `outliers`. Non-positive values can't go on a
+    log axis, so they are excluded from the histogram and only counted."""
+    pos = [(r, v) for r, v in pairs if v > 0]
+    fences = _fences([v for _, v in pos])
+    if fences:
+        for r, v in pos:
+            side = "high" if v > fences["high"] else "low" if v < fences["low"] else None
+            if not side:
+                continue
+            extreme = v > fences["high_extreme"] if side == "high" else v < fences["low_extreme"]
+            it = _list_item(r)
+            outliers.append({"metric": metric, "facet": facet, "unit": unit, "value": v, "side": side,
+                             "severity": "extreme" if extreme else "mild",
+                             "fence": fences["high"] if side == "high" else fences["low"],
+                             "record_id": it["record_id"], "title": it["title"],
+                             "property_type_raw": it["property_type_raw"],
+                             "amount": it["amount"], "currency": it["currency"],
+                             "amount_raw": it["amount_raw"]})
+    vals = sorted(v for _, v in pos)
+    return {"metric": metric, "label": label, "facet": facet, "unit": unit, "n": len(pos),
+            "non_positive": len(pairs) - len(pos),
+            "min": vals[0] if vals else None, "max": vals[-1] if vals else None,
+            "median": _quantile(vals, 0.5) if vals else None,
+            "fences": fences, "bins": _log_bins(vals) if vals else []}
+
+
+@router.get("/distributions")
+def listings_distributions(f: dict = Depends(_filters)):
+    """Server-side histograms (log10 bins) split by currency / unit — never mixing units on one
+    axis — plus IQR-on-log10 outlier flags and the property type x listing type mix."""
+    rows = _matching(f)
+    excluded = len(_matching({**f, "latest_only": False})) - len(rows) if f.get("latest_only") else 0
+    outliers: list[dict] = []
+    facets: list[dict] = []
+
+    def grouped(metric, label, section, key, keyf):
+        groups: dict[str, list] = defaultdict(list)
+        for r in rows:
+            v = _num(_g(r, section, key))
+            if v is not None:
+                groups[keyf(r)].append((r, v))
+        for g, pairs in sorted(groups.items()):
+            facets.append(_facet(metric, label, g, g if metric != "price" else None, pairs, outliers))
+
+    grouped("price", "Asking price", "price", "amount", lambda r: _label(_g(r, "price", "currency")))
+    grouped("floor_area", "Floor area", "attributes", "floor_area",
+            lambda r: _label(_g(r, "attributes", "floor_area_unit")))
+    grouped("lot_size", "Lot size", "attributes", "lot_size",
+            lambda r: _label(_g(r, "attributes", "lot_size_unit")))
+
+    ppu_groups: dict[str, list] = defaultdict(list)
+    skipped = 0
+    for r in rows:
+        area, price = _num(_g(r, "attributes", "floor_area")), _num(_g(r, "price", "amount"))
+        if not (area and price and area > 0 and price > 0):
+            continue
+        unit = _g(r, "attributes", "floor_area_unit")
+        if unit not in COMPARABLE_AREA_UNITS:
+            skipped += 1
+            continue
+        ppu_groups[f"{_label(_g(r, 'price', 'currency'))} / {unit}"].append((r, price / area))
+    for g, pairs in sorted(ppu_groups.items()):
+        facets.append(_facet("price_per_area", "Price per floor-area unit", g, g.split(" / ")[1],
+                             pairs, outliers))
+
+    beds = Counter(b for r in rows if (b := _num(_g(r, "attributes", "bedrooms"))) is not None)
+    bedrooms = [{"bedrooms": int(k) if float(k).is_integer() else k, "count": n}
+                for k, n in sorted(beds.items())]
+
+    matrix: dict[tuple, int] = defaultdict(int)
+    for r in rows:
+        matrix[(_label(_g(r, "attributes", "property_type_raw")),
+                _label(_g(r, "listing", "listing_type_raw")))] += 1
+    ptypes = Counter(_label(_g(r, "attributes", "property_type_raw")) for r in rows)
+
+    outliers.sort(key=lambda o: (o["severity"] != "extreme", -abs(math.log10(o["value"] / o["fence"]))))
+    return {
+        "coverage_note": COVERAGE_NOTE, "total": len(rows), "duplicates_excluded": excluded,
+        "facets": facets, "bedrooms": bedrooms,
+        "bedrooms_missing": len(rows) - sum(beds.values()),
+        "price_per_area_skipped_incomparable_unit": skipped,
+        "outliers": outliers,
+        "outlier_rule": (f"log10(value) outside Q1-{OUTLIER_K}·IQR … Q3+{OUTLIER_K}·IQR within each "
+                         f"currency/unit facet (extreme beyond {EXTREME_K}·IQR); facets with "
+                         f"n<{OUTLIER_MIN_N} are not fenced"),
+        "property_by_listing_type": [{"property_type": a, "listing_type": b, "count": c}
+                                     for (a, b), c in sorted(matrix.items(), key=lambda kv: -kv[1])],
+        "property_type_totals": [{"property_type": k, "count": n} for k, n in ptypes.most_common()],
+    }
+
+
+# ---------- map ----------
+
+JAMAICA_BBOX = {"lat_min": 17.6, "lat_max": 18.6, "lon_min": -78.5, "lon_max": -76.1}
+CLUSTER_MIN = 3
+
+
+def _in_jamaica(lat: float, lon: float) -> bool:
+    b = JAMAICA_BBOX
+    return b["lat_min"] <= lat <= b["lat_max"] and b["lon_min"] <= lon <= b["lon_max"]
+
+
+def _geo_problem(lat: float, lon: float) -> Optional[str]:
+    if _in_jamaica(lat, lon):
+        return None
+    if (lat, lon) == (0, 0):
+        return "null_island"
+    if _in_jamaica(lon, lat):
+        return "lat_lon_swapped"
+    if lon > 0 and _in_jamaica(lat, -lon):
+        return "longitude_sign_lost"
+    return "outside_jamaica"
+
+
+@router.get("/geo")
+def listings_geo(f: dict = Depends(_filters), min_cluster: int = Query(CLUSTER_MIN, ge=2)):
+    """Listings with coordinates, bounding-box problems, and clusters of listings sharing identical
+    coordinates (typically a parish/community centroid fallback)."""
+    rows = _matching(f)
+    excluded = len(_matching({**f, "latest_only": False})) - len(rows) if f.get("latest_only") else 0
+    points: list[dict] = []
+    by_coord: dict[tuple, list[dict]] = defaultdict(list)
+    for r in rows:
+        lat, lon = _num(_g(r, "location", "latitude")), _num(_g(r, "location", "longitude"))
+        if lat is None or lon is None:
+            continue
+        it = _list_item(r)
+        p = {k: it[k] for k in ("record_id", "site_listing_ref", "title", "property_type_raw", "listing_type_raw", "amount",
+                                "currency", "community", "parish_raw", "geo_precision")}
+        p.update(latitude=lat, longitude=lon, geo_source=_g(r, "location", "geo_source"),
+                 problem=_geo_problem(lat, lon))
+        points.append(p)
+        by_coord[(round(lat, 5), round(lon, 5))].append(p)
+    def distinct(members):  # the same listing observed in several runs is not a shared centroid
+        return len({m["site_listing_ref"] or m["record_id"] for m in members})
+
+    for p in points:
+        members = by_coord[(round(p["latitude"], 5), round(p["longitude"], 5))]
+        p["shared_count"] = distinct(members)
+
+    clusters = []
+    for (lat, lon), members in by_coord.items():
+        if distinct(members) < min_cluster:
+            continue
+        clusters.append({
+            "latitude": lat, "longitude": lon, "count": distinct(members), "observations": len(members),
+            "communities": sorted({_label(m["community"]) for m in members}),
+            "parishes": sorted({_label(m["parish_raw"]) for m in members}),
+            "geo_precision": dict(Counter(_label(m["geo_precision"]) for m in members)),
+            "geo_source": dict(Counter(_label(m["geo_source"]) for m in members)),
+            "property_types": dict(Counter(_label(m["property_type_raw"]) for m in members)),
+            "record_ids": [m["record_id"] for m in members][:100],
+            "problem": _geo_problem(lat, lon),
+        })
+    clusters.sort(key=lambda c: -c["count"])
+    return {
+        "coverage_note": COVERAGE_NOTE, "bbox": JAMAICA_BBOX, "total": len(rows), "duplicates_excluded": excluded,
+        "with_coordinates": len(points), "without_coordinates": len(rows) - len(points),
+        "geo_precision": dict(Counter(_label(p["geo_precision"]) for p in points)),
+        "geo_source": dict(Counter(_label(p["geo_source"]) for p in points)),
+        "points": points, "outside_bbox": [p for p in points if p["problem"]],
+        "clusters": clusters, "points_in_clusters": sum(c["observations"] for c in clusters),
+        "min_cluster": min_cluster,
+    }
 
 
 @router.get("/{record_id}")
